@@ -35,16 +35,17 @@ TIMEFRAME_MILLISECONDS = {
 
 
 def create_exchange() -> ccxt.okx:
-    """Create an authenticated OKX client (public OHLCV access also works)."""
-    return ccxt.okx(
+    """Create a public-only OKX client for market-data requests."""
+    exchange = ccxt.okx(
         {
-            "apiKey": os.environ.get("OKX_API_KEY", ""),
-            "secret": os.environ.get("OKX_SECRET", ""),
-            "password": os.environ.get("OKX_PASSWORD", ""),
             "enableRateLimit": True,
             "options": {"defaultType": "swap"},
         }
     )
+    # OKX's currency endpoint is private in CCXT.  The bot needs only public
+    # swap-market metadata and OHLCV, so never authenticate or request it.
+    exchange.has["fetchCurrencies"] = False
+    return exchange
 
 
 def fetch_rsi_frame(exchange: ccxt.okx, symbol: str, timeframe: str) -> pd.DataFrame:
