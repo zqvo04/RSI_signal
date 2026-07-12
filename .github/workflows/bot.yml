@@ -1,9 +1,9 @@
 name: RSI Telegram Signal Bot
 
 on:
-  schedule:
-    # GitHub Actions cron uses UTC: run one minute after each 15-minute close.
-    - cron: '1,16,31,46 * * * *'
+  # Triggered by console.cron-job.org through GitHub's repository dispatch API.
+  repository_dispatch:
+    types: [rsi-signal-check]
   workflow_dispatch:
 
 permissions:
