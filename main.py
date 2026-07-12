@@ -109,10 +109,34 @@ def format_message(coin: str, timeframe: str, side: str, previous: pd.Series, cu
     )
 
 
+def write_workflow_summary(checked_count: int, signal_count: int, error_count: int) -> None:
+    """Show an operational summary in the GitHub Actions run page."""
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary_path:
+        return
+
+    status = "✅ 정상" if error_count == 0 else "⚠️ 일부 오류"
+    with open(summary_path, "a", encoding="utf-8") as summary:
+        summary.write(
+            "## RSI Signal Bot 실행 결과\n\n"
+            f"- 상태: **{status}**\n"
+            f"- 검사 완료: **{checked_count}건**\n"
+            f"- 발생 신호: **{signal_count}건**\n"
+            f"- 오류: **{error_count}건**\n"
+            f"- 실행 시각(UTC): {pd.Timestamp.now(tz='UTC').strftime('%Y-%m-%d %H:%M:%S')}\n"
+        )
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    logging.info("RSI signal scan started (UTC %s)", pd.Timestamp.now(tz="UTC").isoformat())
     exchange = create_exchange()
     exchange.load_markets()
+    logging.info("Loaded %d OKX markets", len(exchange.markets))
+
+    checked_count = 0
+    signal_count = 0
+    error_count = 0
 
     for coin in WATCHLIST:
         symbol = f"{coin}/USDT:USDT"
@@ -121,18 +145,32 @@ def main() -> None:
             continue
 
         for timeframe in TIMEFRAMES:
+            checked_count += 1
             try:
                 frame = fetch_rsi_frame(exchange, symbol, timeframe)
                 signal = find_signal(frame, timeframe)
                 if signal:
                     side, previous, current = signal
                     send_telegram_message(format_message(coin, timeframe, side, previous, current))
+                    signal_count += 1
                     logging.info("Sent %s signal for %s (%s)", side, symbol, timeframe)
             except (ccxt.BaseError, requests.RequestException, ValueError, RuntimeError) as error:
+                error_count += 1
                 logging.exception("Failed to check %s (%s): %s", symbol, timeframe, error)
             finally:
                 # Additional pacing protects both OHLCV and Telegram endpoints.
                 time.sleep(REQUEST_DELAY_SECONDS)
+
+    logging.info(
+        "RSI signal scan finished: %d checks, %d alerts sent, %d errors",
+        checked_count,
+        signal_count,
+        error_count,
+    )
+    all_checks_failed = bool(checked_count and error_count == checked_count)
+    write_workflow_summary(checked_count, signal_count, error_count)
+    if all_checks_failed:
+        raise RuntimeError("Every market check failed; see the errors above.")
 
 
 if __name__ == "__main__":
