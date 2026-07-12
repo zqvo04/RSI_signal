@@ -149,6 +149,12 @@ def write_workflow_summary(
                     f"| {timeframe} | {previous_time} | {previous['rsi']:.2f} | "
                     f"{current_time} | {current['rsi']:.2f} |\n"
                 )
+        else:
+            summary.write(
+                "\n### BTC 최근 확정 캔들 RSI(14)\n\n"
+                "BTC 완료 캔들 샘플을 만들지 못했습니다. 실행 로그의 `BTC RSI sample` 또는 "
+                "`Failed to check BTC` 항목을 확인하세요.\n"
+            )
 
 
 def main() -> None:
@@ -175,7 +181,14 @@ def main() -> None:
                 frame = fetch_rsi_frame(exchange, symbol, timeframe)
                 completed_candles = latest_completed_candles(frame, timeframe)
                 if coin == "BTC" and completed_candles:
-                    btc_rsi_samples.append((timeframe, *completed_candles))
+                    previous, current = completed_candles
+                    btc_rsi_samples.append((timeframe, previous, current))
+                    logging.info(
+                        "BTC RSI sample (%s): %.2f -> %.2f",
+                        timeframe,
+                        previous["rsi"],
+                        current["rsi"],
+                    )
                 signal = find_signal(frame, timeframe)
                 if signal:
                     side, previous, current = signal
