@@ -28,9 +28,6 @@ jobs:
 
       - name: Check RSI reversal signals
         env:
-          OKX_API_KEY: ${{ secrets.OKX_API_KEY }}
-          OKX_SECRET: ${{ secrets.OKX_SECRET }}
-          OKX_PASSWORD: ${{ secrets.OKX_PASSWORD }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python main.py
