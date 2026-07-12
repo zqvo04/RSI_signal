@@ -62,8 +62,8 @@ def fetch_rsi_frame(exchange: ccxt.okx, symbol: str, timeframe: str) -> pd.DataF
     return frame.dropna(subset=["rsi"]).reset_index(drop=True)
 
 
-def find_signal(frame: pd.DataFrame, timeframe: str) -> Optional[tuple[str, pd.Series, pd.Series]]:
-    """Return a reversal signal using the two latest confirmed, closed candles."""
+def latest_completed_candles(frame: pd.DataFrame, timeframe: str) -> Optional[tuple[pd.Series, pd.Series]]:
+    """Return the two latest confirmed, closed candles for a timeframe."""
     now_ms = int(time.time() * 1000)
     close_cutoff_ms = now_ms - (CANDLE_CLOSE_GRACE_SECONDS * 1000)
     timeframe_ms = TIMEFRAME_MILLISECONDS[timeframe]
@@ -74,8 +74,16 @@ def find_signal(frame: pd.DataFrame, timeframe: str) -> Optional[tuple[str, pd.S
     if len(completed) < 2:
         return None
 
-    previous = completed.iloc[-2]
-    current = completed.iloc[-1]
+    return completed.iloc[-2], completed.iloc[-1]
+
+
+def find_signal(frame: pd.DataFrame, timeframe: str) -> Optional[tuple[str, pd.Series, pd.Series]]:
+    """Return an RSI reversal signal from the two latest completed candles."""
+    candles = latest_completed_candles(frame, timeframe)
+    if candles is None:
+        return None
+
+    previous, current = candles
     if previous["rsi"] < 30 and current["rsi"] >= 30:
         return "LONG", previous, current
     if previous["rsi"] > 70 and current["rsi"] <= 70:
@@ -109,7 +117,12 @@ def format_message(coin: str, timeframe: str, side: str, previous: pd.Series, cu
     )
 
 
-def write_workflow_summary(checked_count: int, signal_count: int, error_count: int) -> None:
+def write_workflow_summary(
+    checked_count: int,
+    signal_count: int,
+    error_count: int,
+    btc_rsi_samples: list[tuple[str, pd.Series, pd.Series]],
+) -> None:
     """Show an operational summary in the GitHub Actions run page."""
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if not summary_path:
@@ -125,6 +138,17 @@ def write_workflow_summary(checked_count: int, signal_count: int, error_count: i
             f"- 오류: **{error_count}건**\n"
             f"- 실행 시각(UTC): {pd.Timestamp.now(tz='UTC').strftime('%Y-%m-%d %H:%M:%S')}\n"
         )
+        if btc_rsi_samples:
+            summary.write("\n### BTC 최근 확정 캔들 RSI(14)\n\n")
+            summary.write("| 시간봉 | 이전 완료 캔들 (UTC) | 이전 RSI | 최근 완료 캔들 (UTC) | 최근 RSI |\n")
+            summary.write("| --- | --- | ---: | --- | ---: |\n")
+            for timeframe, previous, current in btc_rsi_samples:
+                previous_time = pd.to_datetime(previous["timestamp"], unit="ms", utc=True).strftime("%Y-%m-%d %H:%M")
+                current_time = pd.to_datetime(current["timestamp"], unit="ms", utc=True).strftime("%Y-%m-%d %H:%M")
+                summary.write(
+                    f"| {timeframe} | {previous_time} | {previous['rsi']:.2f} | "
+                    f"{current_time} | {current['rsi']:.2f} |\n"
+                )
 
 
 def main() -> None:
@@ -137,6 +161,7 @@ def main() -> None:
     checked_count = 0
     signal_count = 0
     error_count = 0
+    btc_rsi_samples: list[tuple[str, pd.Series, pd.Series]] = []
 
     for coin in WATCHLIST:
         symbol = f"{coin}/USDT:USDT"
@@ -148,6 +173,9 @@ def main() -> None:
             checked_count += 1
             try:
                 frame = fetch_rsi_frame(exchange, symbol, timeframe)
+                completed_candles = latest_completed_candles(frame, timeframe)
+                if coin == "BTC" and completed_candles:
+                    btc_rsi_samples.append((timeframe, *completed_candles))
                 signal = find_signal(frame, timeframe)
                 if signal:
                     side, previous, current = signal
@@ -168,7 +196,7 @@ def main() -> None:
         error_count,
     )
     all_checks_failed = bool(checked_count and error_count == checked_count)
-    write_workflow_summary(checked_count, signal_count, error_count)
+    write_workflow_summary(checked_count, signal_count, error_count, btc_rsi_samples)
     if all_checks_failed:
         raise RuntimeError("Every market check failed; see the errors above.")
 
