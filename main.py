@@ -27,6 +27,11 @@ REQUEST_DELAY_SECONDS = 0.5
 # The workflow runs one minute after each 15-minute boundary.  This short
 # additional buffer avoids using a candle whose final exchange value is late.
 CANDLE_CLOSE_GRACE_SECONDS = 30
+# The scheduler dispatches the workflow every 15 minutes.  A 1h/4h crossing
+# candle stays the "latest completed" candle for many scans, so an alert is
+# only sent on the first scan after it closes; later scans treat the same
+# crossing as stale and skip it to avoid duplicate notifications.
+SCAN_INTERVAL_SECONDS = 15 * 60
 TIMEFRAME_MILLISECONDS = {
     "15m": 15 * 60 * 1000,
     "1h": 60 * 60 * 1000,
@@ -77,6 +82,19 @@ def latest_completed_candles(frame: pd.DataFrame, timeframe: str) -> Optional[tu
     return completed.iloc[-2], completed.iloc[-1]
 
 
+def is_freshly_closed(current: pd.Series, timeframe: str) -> bool:
+    """Return True only during the first scan after ``current`` closed.
+
+    A 1h/4h crossing candle remains the latest completed candle across many
+    15-minute scans.  Without this guard the same crossing would be re-sent on
+    every scan until the next candle closes.  A candle is "fresh" while its
+    close time is within the most recent scan interval.
+    """
+    now_ms = int(time.time() * 1000)
+    close_ms = int(current["timestamp"]) + TIMEFRAME_MILLISECONDS[timeframe]
+    return now_ms - close_ms < SCAN_INTERVAL_SECONDS * 1000
+
+
 def find_signal(frame: pd.DataFrame, timeframe: str) -> Optional[tuple[str, pd.Series, pd.Series]]:
     """Return an RSI reversal signal from the two latest completed candles."""
     candles = latest_completed_candles(frame, timeframe)
@@ -84,6 +102,10 @@ def find_signal(frame: pd.DataFrame, timeframe: str) -> Optional[tuple[str, pd.S
         return None
 
     previous, current = candles
+    # Alert only on the first scan after the crossing candle closes so a 1h/4h
+    # crossing is not re-sent on every 15-minute scan.
+    if not is_freshly_closed(current, timeframe):
+        return None
     if previous["rsi"] < 30 and current["rsi"] >= 30:
         return "LONG", previous, current
     if previous["rsi"] > 70 and current["rsi"] <= 70:
