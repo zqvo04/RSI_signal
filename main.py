@@ -92,8 +92,11 @@ def find_signal(frame: pd.DataFrame, timeframe: str) -> Optional[tuple[str, pd.S
 
 
 def send_telegram_message(message: str) -> None:
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    # Secrets pasted into GitHub can carry a trailing newline or spaces.  An
+    # untrimmed chat_id makes Telegram reject sendMessage with a 400
+    # "chat not found", so always strip before use.
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
     if not token or not chat_id:
         raise RuntimeError("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be configured.")
 
@@ -102,7 +105,18 @@ def send_telegram_message(message: str) -> None:
         json={"chat_id": chat_id, "text": message},
         timeout=15,
     )
-    response.raise_for_status()
+    if not response.ok:
+        # raise_for_status() drops Telegram's explanation and only reports the
+        # (token-masked) URL.  Surface the API body so failures like
+        # "chat not found" are actually diagnosable from the workflow log.
+        description = response.text
+        try:
+            description = response.json().get("description", description)
+        except ValueError:
+            pass
+        raise RuntimeError(
+            f"Telegram sendMessage failed ({response.status_code}): {description}"
+        )
 
 
 def format_message(coin: str, timeframe: str, side: str, previous: pd.Series, current: pd.Series) -> str:
