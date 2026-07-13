@@ -27,10 +27,11 @@ REQUEST_DELAY_SECONDS = 0.5
 # The workflow runs one minute after each 15-minute boundary.  This short
 # additional buffer avoids using a candle whose final exchange value is late.
 CANDLE_CLOSE_GRACE_SECONDS = 30
-# The scheduler dispatches the workflow every 15 minutes.  A 1h/4h crossing
-# candle stays the "latest completed" candle for many scans, so an alert is
-# only sent on the first scan after it closes; later scans treat the same
-# crossing as stale and skip it to avoid duplicate notifications.
+# The scheduler dispatches the workflow every 15 minutes.  An alert fires only
+# on the first scan after a crossing candle closes (the :01 run following the
+# candle boundary).  For 15m this means every completed candle can alert, while
+# a 1h/4h crossing candle -- which stays the "latest completed" candle for many
+# scans -- alerts once instead of being re-sent on every scan.
 SCAN_INTERVAL_SECONDS = 15 * 60
 TIMEFRAME_MILLISECONDS = {
     "15m": 15 * 60 * 1000,
