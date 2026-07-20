@@ -1,4 +1,11 @@
-"""OKX USDT perpetual RSI and MACD signal notifier."""
+"""OKX USDT perpetual RSI, MACD and Stochastic(KDJ) signal notifier.
+
+Stochastic (KDJ) assumptions (documented here and in code):
+- We use a common KDJ/Stochastic parameterization: K length = 9, D = 3, smoothing K = 3 (i.e. 9,3,3).
+- pandas_ta.stoch is used to compute %K and %D. Only %K and %D are considered; J is ignored.
+
+These parameters mirror a typical KDJ implementation on many exchanges; if you want explicit OKX-native params, tell me and I will adjust.
+"""
 
 import logging
 import os
@@ -17,6 +24,7 @@ WATCHLIST = [
 ]
 TIMEFRAMES = ("15m", "1h", "4h")
 MACD_TIMEFRAMES = ("1h", "4h")
+STOCH_TIMEFRAMES = ("1h", "4h")  # KDJ signals only for 1h and 4h as requested
 TIMEFRAME_IMPORTANCE = {
     "4h": ("🔥", "높은 신뢰도"),
     "1h": ("⚡️", "중간 신뢰도"),
@@ -26,6 +34,10 @@ RSI_LENGTH = 14
 MACD_FAST = 12
 MACD_SLOW = 26
 MACD_SIGNAL = 9
+# Stochastic (KDJ) parameters (assumption: KDJ as 9,3,3)
+STOCH_K = 9
+STOCH_D = 3
+STOCH_SMOOTH = 3
 OHLCV_LIMIT = 100
 REQUEST_DELAY_SECONDS = 0.5
 # The workflow runs one minute after each 15-minute boundary.  This short
@@ -95,6 +107,31 @@ def fetch_macd_frame(exchange: ccxt.okx, symbol: str, timeframe: str) -> pd.Data
     frame["dif"] = macd[dif_column]
     frame["dea"] = macd[dea_column]
     return frame.dropna(subset=["dif", "dea"]).reset_index(drop=True)
+
+
+def fetch_stoch_frame(exchange: ccxt.okx, symbol: str, timeframe: str) -> pd.DataFrame:
+    """Fetch OHLCV and calculate Stochastic %K and %D (KDJ).
+
+    Assumptions: KDJ parameters are (K=9, D=3, smooth_k=3). If you prefer
+    different parameters (OKX-native), let me know.
+    """
+    candles = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=OHLCV_LIMIT)
+    frame = pd.DataFrame(candles, columns=["timestamp", "open", "high", "low", "close", "volume"])
+
+    numeric_columns = ["open", "high", "low", "close", "volume"]
+    frame[numeric_columns] = frame[numeric_columns].apply(pd.to_numeric, errors="coerce")
+    frame = frame.dropna(subset=["timestamp", *numeric_columns]).copy()
+    frame = frame.sort_values("timestamp").drop_duplicates(subset="timestamp")
+
+    stoch = ta.stoch(frame["high"], frame["low"], frame["close"], k=STOCH_K, d=STOCH_D, smooth_k=STOCH_SMOOTH)
+    # pandas_ta returns two columns (k and d) with names like STOCHk_9_3_3 and STOCHd_9_3_3.
+    if stoch is None or len(stoch.columns) < 2:
+        return frame.iloc[0:0].copy()
+
+    k_col, d_col = stoch.columns[:2]
+    frame["k"] = stoch[k_col]
+    frame["d"] = stoch[d_col]
+    return frame.dropna(subset=["k", "d"]).reset_index(drop=True)
 
 
 def latest_completed_candles(frame: pd.DataFrame, timeframe: str) -> Optional[tuple[pd.Series, pd.Series]]:
@@ -174,6 +211,51 @@ def find_macd_signal(frame: pd.DataFrame, timeframe: str) -> Optional[tuple[str,
     return None
 
 
+def find_stoch_signal(frame: pd.DataFrame, timeframe: str) -> Optional[tuple[str, pd.Series, pd.Series]]:
+    """Return a Stochastic (KDJ) signal from the two latest completed candles.
+
+    Exact rules implemented (per your request):
+    - LONG:
+      - %K and %D are each 20 or below (oversold)
+      - %K crosses above %D on the latest completed candle (previous %K < %D and current %K >= current %D)
+    - SHORT:
+      - %K and %D are each 80 or above (overbought)
+      - %K crosses below %D on the latest completed candle (previous %K > %D and current %K <= current %D)
+    """
+    candles = latest_completed_candles(frame, timeframe)
+    if candles is None:
+        return None
+
+    previous, current = candles
+    if not is_freshly_closed(current, timeframe):
+        return None
+
+    prev_k = float(previous["k"])
+    prev_d = float(previous["d"])
+    curr_k = float(current["k"])
+    curr_d = float(current["d"])
+
+    # LONG condition
+    if (
+        prev_k < prev_d
+        and curr_k >= curr_d
+        and curr_k <= 20
+        and curr_d <= 20
+    ):
+        return "LONG", previous, current
+
+    # SHORT condition
+    if (
+        prev_k > prev_d
+        and curr_k <= curr_d
+        and curr_k >= 80
+        and curr_d >= 80
+    ):
+        return "SHORT", previous, current
+
+    return None
+
+
 def send_telegram_message(message: str) -> None:
     # Secrets pasted into GitHub can carry a trailing newline or spaces.  An
     # untrimmed chat_id makes Telegram reject sendMessage with a 400
@@ -230,12 +312,25 @@ def format_macd_message(coin: str, timeframe: str, side: str, previous: pd.Serie
     )
 
 
+def format_stoch_message(coin: str, timeframe: str, side: str, previous: pd.Series, current: pd.Series) -> str:
+    """Minimal Stochastic alert message as requested."""
+    importance, _ = TIMEFRAME_IMPORTANCE[timeframe]
+    position = "📈 LONG" if side == "LONG" else "📉 SHORT"
+    # Keep the message intentionally short per your request.
+    return (
+        f"🚨 [{timeframe}] Stochastic 신호 발생 {importance}\n"
+        f"- 코인: {coin}\n"
+        f"- 포지션: {position}"
+    )
+
+
 def write_workflow_summary(
     checked_count: int,
     signal_count: int,
     error_count: int,
     btc_rsi_samples: list[tuple[str, pd.Series, pd.Series]],
     btc_macd_samples: list[tuple[str, pd.Series, pd.Series]],
+    btc_stoch_samples: list[tuple[str, pd.Series, pd.Series]],
 ) -> None:
     """Show an operational summary in the GitHub Actions run page."""
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -286,6 +381,23 @@ def write_workflow_summary(
                 "BTC 완료 캔들 샘플을 만들지 못했습니다. 실행 로그의 `BTC MACD sample` 또는 "
                 "`Failed to check BTC` 항목을 확인하세요.\n"
             )
+        if btc_stoch_samples:
+            summary.write("\n### BTC 최근 확정 캔들 Stochastic (K,D)\n\n")
+            summary.write("| 시간봉 | 이전 완료 캔들 (UTC) | 이전 K / D | 최근 완료 캔들 (UTC) | 최근 K / D |\n")
+            summary.write("| --- | --- | --- | --- | --- |\n")
+            for timeframe, previous, current in btc_stoch_samples:
+                previous_time = pd.to_datetime(previous["timestamp"], unit="ms", utc=True).strftime("%Y-%m-%d %H:%M")
+                current_time = pd.to_datetime(current["timestamp"], unit="ms", utc=True).strftime("%Y-%m-%d %H:%M")
+                summary.write(
+                    f"| {timeframe} | {previous_time} | {previous['k']:.2f} / {previous['d']:.2f} | "
+                    f"{current_time} | {current['k']:.2f} / {current['d']:.2f} |\n"
+                )
+        else:
+            summary.write(
+                "\n### BTC 최근 확정 캔들 Stochastic (K,D)\n\n"
+                "BTC 완료 캔들 샘플을 만들지 못했습니다. 실행 로그의 `BTC Stochastic sample` 또는 "
+                "`Failed to check BTC` 항목을 확인하세요.\n"
+            )
 
 
 def main() -> None:
@@ -300,6 +412,7 @@ def main() -> None:
     error_count = 0
     btc_rsi_samples: list[tuple[str, pd.Series, pd.Series]] = []
     btc_macd_samples: list[tuple[str, pd.Series, pd.Series]] = []
+    btc_stoch_samples: list[tuple[str, pd.Series, pd.Series]] = []
 
     for coin in WATCHLIST:
         symbol = f"{coin}/USDT:USDT"
@@ -361,6 +474,35 @@ def main() -> None:
             finally:
                 time.sleep(REQUEST_DELAY_SECONDS)
 
+        # Stochastic (KDJ) checks for 1h and 4h only
+        for timeframe in STOCH_TIMEFRAMES:
+            checked_count += 1
+            try:
+                frame = fetch_stoch_frame(exchange, symbol, timeframe)
+                completed_candles = latest_completed_candles(frame, timeframe)
+                if coin == "BTC" and completed_candles:
+                    previous, current = completed_candles
+                    btc_stoch_samples.append((timeframe, previous, current))
+                    logging.info(
+                        "BTC Stochastic sample (%s): K %.2f / D %.2f -> K %.2f / D %.2f",
+                        timeframe,
+                        previous["k"],
+                        previous["d"],
+                        current["k"],
+                        current["d"],
+                    )
+                signal = find_stoch_signal(frame, timeframe)
+                if signal:
+                    side, previous, current = signal
+                    send_telegram_message(format_stoch_message(coin, timeframe, side, previous, current))
+                    signal_count += 1
+                    logging.info("Sent Stochastic %s signal for %s (%s)", side, symbol, timeframe)
+            except (ccxt.BaseError, requests.RequestException, ValueError, RuntimeError) as error:
+                error_count += 1
+                logging.exception("Failed to check Stochastic %s (%s): %s", symbol, timeframe, error)
+            finally:
+                time.sleep(REQUEST_DELAY_SECONDS)
+
     logging.info(
         "Signal scan finished: %d checks, %d alerts sent, %d errors",
         checked_count,
@@ -368,7 +510,7 @@ def main() -> None:
         error_count,
     )
     all_checks_failed = bool(checked_count and error_count == checked_count)
-    write_workflow_summary(checked_count, signal_count, error_count, btc_rsi_samples, btc_macd_samples)
+    write_workflow_summary(checked_count, signal_count, error_count, btc_rsi_samples, btc_macd_samples, btc_stoch_samples)
     if all_checks_failed:
         raise RuntimeError("Every market check failed; see the errors above.")
 
