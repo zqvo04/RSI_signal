@@ -26,9 +26,9 @@ TIMEFRAMES = ("15m", "1h", "4h")
 MACD_TIMEFRAMES = ("1h", "4h")
 STOCH_TIMEFRAMES = ("1h", "4h")  # KDJ signals only for 1h and 4h as requested
 TIMEFRAME_IMPORTANCE = {
-    "4h": ("🔥", "높은 신뢰도"),
-    "1h": ("⚡️", "중간 신뢰도"),
-    "15m": ("👀", "단기 진입 타점"),
+    "4h": "🔥",
+    "1h": "⚡️",
+    "15m": "👀",
 }
 RSI_LENGTH = 14
 MACD_FAST = 12
@@ -285,40 +285,34 @@ def send_telegram_message(message: str) -> None:
 
 
 def format_rsi_message(coin: str, timeframe: str, side: str, previous: pd.Series, current: pd.Series) -> str:
-    importance, description = TIMEFRAME_IMPORTANCE[timeframe]
+    importance = TIMEFRAME_IMPORTANCE[timeframe]
     position = "📈 LONG" if side == "LONG" else "📉 SHORT"
     return (
-        f"🚨 [{timeframe}] 신호 발생 (중요도: {importance} {description})\n"
+        f"🚨 [{timeframe}] RSI 신호 발생{importance}\n"
         f"- 코인: {coin}\n"
-        f"- 포지션: {position}\n"
-        f"- 현재가: {current['close']:,.8g} USDT\n"
-        f"- RSI 지표: {previous['rsi']:.2f} -> {current['rsi']:.2f} (돌파 완료)"
+        f"- 포지션: {position}"
     )
 
 
 def format_macd_message(coin: str, timeframe: str, side: str, previous: pd.Series, current: pd.Series) -> str:
-    importance, description = TIMEFRAME_IMPORTANCE[timeframe]
+    importance = TIMEFRAME_IMPORTANCE[timeframe]
     if side == "LONG":
-        position = "📈 LONG (골든크로스)"
+        position = "📈 LONG"
     else:
-        position = "📉 SHORT (데드크로스)"
+        position = "📉 SHORT"
     return (
-        f"🚨 [{timeframe}] MACD 신호 발생 (중요도: {importance} {description})\n"
+        f"🚨 [{timeframe}] MACD 신호 발생{importance}\n"
         f"- 코인: {coin}\n"
-        f"- 포지션: {position}\n"
-        f"- 현재가: {current['close']:,.8g} USDT\n"
-        f"- MACD 지표: DIF {previous['dif']:.4f} / DEA {previous['dea']:.4f} -> "
-        f"DIF {current['dif']:.4f} / DEA {current['dea']:.4f} (돌파 완료)"
+        f"- 포지션: {position}"
     )
 
 
 def format_stoch_message(coin: str, timeframe: str, side: str, previous: pd.Series, current: pd.Series) -> str:
     """Minimal Stochastic alert message as requested."""
-    importance, _ = TIMEFRAME_IMPORTANCE[timeframe]
+    importance = TIMEFRAME_IMPORTANCE[timeframe]
     position = "📈 LONG" if side == "LONG" else "📉 SHORT"
-    # Keep the message intentionally short per your request.
     return (
-        f"🚨 [{timeframe}] Stochastic 신호 발생 {importance}\n"
+        f"🚨 [{timeframe}] Stochastic 신호 발생{importance}\n"
         f"- 코인: {coin}\n"
         f"- 포지션: {position}"
     )
