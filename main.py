@@ -1,10 +1,10 @@
 """OKX USDT perpetual RSI, MACD and Stochastic(KDJ) signal notifier.
 
 Stochastic (KDJ) assumptions (documented here and in code):
-- We use a common KDJ/Stochastic parameterization: K length = 9, D = 3, smoothing K = 3 (i.e. 9,3,3).
+- We use KDJ/Stochastic parameterization: K length = 14, D = 3 (i.e. 14,3,3).
 - pandas_ta.stoch is used to compute %K and %D. Only %K and %D are considered; J is ignored.
 
-These parameters mirror a typical KDJ implementation on many exchanges; if you want explicit OKX-native params, tell me and I will adjust.
+These parameters mirror OKX KDJ implementation on their platform.
 """
 
 import logging
@@ -34,10 +34,10 @@ RSI_LENGTH = 14
 MACD_FAST = 12
 MACD_SLOW = 26
 MACD_SIGNAL = 9
-# Stochastic (KDJ) parameters (assumption: KDJ as 9,3,3)
-STOCH_K = 9
+# Stochastic (KDJ) parameters: OKX KDJ (14,3,3)
+STOCH_K = 14
 STOCH_D = 3
-STOCH_SMOOTH = 3
+STOCH_SMOOTH = 1  # No smoothing for K (direct calculation)
 OHLCV_LIMIT = 100
 REQUEST_DELAY_SECONDS = 0.5
 # The workflow runs one minute after each 15-minute boundary.  This short
@@ -110,10 +110,9 @@ def fetch_macd_frame(exchange: ccxt.okx, symbol: str, timeframe: str) -> pd.Data
 
 
 def fetch_stoch_frame(exchange: ccxt.okx, symbol: str, timeframe: str) -> pd.DataFrame:
-    """Fetch OHLCV and calculate Stochastic %K and %D (KDJ).
+    """Fetch OHLCV and calculate Stochastic %K and %D (OKX KDJ 14,3,3).
 
-    Assumptions: KDJ parameters are (K=9, D=3, smooth_k=3). If you prefer
-    different parameters (OKX-native), let me know.
+    OKX KDJ parameters: K length = 14, D = 3 (SMA of K)
     """
     candles = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=OHLCV_LIMIT)
     frame = pd.DataFrame(candles, columns=["timestamp", "open", "high", "low", "close", "volume"])
@@ -124,7 +123,7 @@ def fetch_stoch_frame(exchange: ccxt.okx, symbol: str, timeframe: str) -> pd.Dat
     frame = frame.sort_values("timestamp").drop_duplicates(subset="timestamp")
 
     stoch = ta.stoch(frame["high"], frame["low"], frame["close"], k=STOCH_K, d=STOCH_D, smooth_k=STOCH_SMOOTH)
-    # pandas_ta returns two columns (k and d) with names like STOCHk_9_3_3 and STOCHd_9_3_3.
+    # pandas_ta returns two columns (k and d) with names like STOCHk_14_3_1 and STOCHd_14_3_1.
     if stoch is None or len(stoch.columns) < 2:
         return frame.iloc[0:0].copy()
 
@@ -214,13 +213,15 @@ def find_macd_signal(frame: pd.DataFrame, timeframe: str) -> Optional[tuple[str,
 def find_stoch_signal(frame: pd.DataFrame, timeframe: str) -> Optional[tuple[str, pd.Series, pd.Series]]:
     """Return a Stochastic (KDJ) signal from the two latest completed candles.
 
-    Exact rules implemented (per your request):
-    - LONG:
+    Exact rules implemented (OKX KDJ 14,3,3):
+    - LONG (Golden Cross):
       - %K and %D are each 20 or below (oversold)
-      - %K crosses above %D on the latest completed candle (previous %K < %D and current %K >= current %D)
-    - SHORT:
+      - %K crosses above %D from below (previous %K < %D and current %K >= current %D)
+      - Previous candle: %K < %D (condition for cross)
+    - SHORT (Dead Cross):
       - %K and %D are each 80 or above (overbought)
-      - %K crosses below %D on the latest completed candle (previous %K > %D and current %K <= current %D)
+      - %K crosses below %D from above (previous %K > %D and current %K <= current %D)
+      - Previous candle: %K > %D (condition for cross)
     """
     candles = latest_completed_candles(frame, timeframe)
     if candles is None:
@@ -235,7 +236,7 @@ def find_stoch_signal(frame: pd.DataFrame, timeframe: str) -> Optional[tuple[str
     curr_k = float(current["k"])
     curr_d = float(current["d"])
 
-    # LONG condition
+    # LONG condition: Golden Cross (K crosses D from below in oversold zone)
     if (
         prev_k < prev_d
         and curr_k >= curr_d
@@ -244,7 +245,7 @@ def find_stoch_signal(frame: pd.DataFrame, timeframe: str) -> Optional[tuple[str
     ):
         return "LONG", previous, current
 
-    # SHORT condition
+    # SHORT condition: Dead Cross (K crosses D from above in overbought zone)
     if (
         prev_k > prev_d
         and curr_k <= curr_d
@@ -285,6 +286,7 @@ def send_telegram_message(message: str) -> None:
 
 
 def format_rsi_message(coin: str, timeframe: str, side: str, previous: pd.Series, current: pd.Series) -> str:
+    """Minimal RSI alert message."""
     importance = TIMEFRAME_IMPORTANCE[timeframe]
     position = "📈 LONG" if side == "LONG" else "📉 SHORT"
     return (
@@ -295,11 +297,9 @@ def format_rsi_message(coin: str, timeframe: str, side: str, previous: pd.Series
 
 
 def format_macd_message(coin: str, timeframe: str, side: str, previous: pd.Series, current: pd.Series) -> str:
+    """Minimal MACD alert message."""
     importance = TIMEFRAME_IMPORTANCE[timeframe]
-    if side == "LONG":
-        position = "📈 LONG"
-    else:
-        position = "📉 SHORT"
+    position = "📈 LONG" if side == "LONG" else "📉 SHORT"
     return (
         f"🚨 [{timeframe}] MACD 신호 발생{importance}\n"
         f"- 코인: {coin}\n"
@@ -376,7 +376,7 @@ def write_workflow_summary(
                 "`Failed to check BTC` 항목을 확인하세요.\n"
             )
         if btc_stoch_samples:
-            summary.write("\n### BTC 최근 확정 캔들 Stochastic (K,D)\n\n")
+            summary.write("\n### BTC 최근 확정 캔들 Stochastic (K,D) - OKX KDJ(14,3,3)\n\n")
             summary.write("| 시간봉 | 이전 완료 캔들 (UTC) | 이전 K / D | 최근 완료 캔들 (UTC) | 최근 K / D |\n")
             summary.write("| --- | --- | --- | --- | --- |\n")
             for timeframe, previous, current in btc_stoch_samples:
@@ -388,7 +388,7 @@ def write_workflow_summary(
                 )
         else:
             summary.write(
-                "\n### BTC 최근 확정 캔들 Stochastic (K,D)\n\n"
+                "\n### BTC 최근 확정 캔들 Stochastic (K,D) - OKX KDJ(14,3,3)\n\n"
                 "BTC 완료 캔들 샘플을 만들지 못했습니다. 실행 로그의 `BTC Stochastic sample` 또는 "
                 "`Failed to check BTC` 항목을 확인하세요.\n"
             )
