@@ -31,6 +31,8 @@ TIMEFRAME_IMPORTANCE = {
     "15m": "👀",
 }
 RSI_LENGTH = 14
+EMA_LENGTH = 20
+RSI_TREND_FILTER_TIMEFRAME = "1h"
 MACD_FAST = 12
 MACD_SLOW = 26
 MACD_SIGNAL = 9
@@ -82,6 +84,19 @@ def fetch_rsi_frame(exchange: ccxt.okx, symbol: str, timeframe: str) -> pd.DataF
     frame = frame.sort_values("timestamp").drop_duplicates(subset="timestamp")
     frame["rsi"] = ta.rsi(frame["close"], length=RSI_LENGTH)
     return frame.dropna(subset=["rsi"]).reset_index(drop=True)
+
+
+def fetch_ema_frame(exchange: ccxt.okx, symbol: str, timeframe: str) -> pd.DataFrame:
+    """Fetch OHLCV and calculate EMA(20)."""
+    candles = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=OHLCV_LIMIT)
+    frame = pd.DataFrame(candles, columns=["timestamp", "open", "high", "low", "close", "volume"])
+
+    numeric_columns = ["open", "high", "low", "close", "volume"]
+    frame[numeric_columns] = frame[numeric_columns].apply(pd.to_numeric, errors="coerce")
+    frame = frame.dropna(subset=["timestamp", *numeric_columns]).copy()
+    frame = frame.sort_values("timestamp").drop_duplicates(subset="timestamp")
+    frame["ema20"] = ta.ema(frame["close"], length=EMA_LENGTH)
+    return frame.dropna(subset=["ema20"]).reset_index(drop=True)
 
 
 def fetch_macd_frame(exchange: ccxt.okx, symbol: str, timeframe: str) -> pd.DataFrame:
@@ -148,6 +163,17 @@ def latest_completed_candles(frame: pd.DataFrame, timeframe: str) -> Optional[tu
     return completed.iloc[-2], completed.iloc[-1]
 
 
+def latest_completed_candle(frame: pd.DataFrame, timeframe: str) -> Optional[pd.Series]:
+    """Return the latest confirmed, closed candle for a timeframe."""
+    now_ms = int(time.time() * 1000)
+    close_cutoff_ms = now_ms - (CANDLE_CLOSE_GRACE_SECONDS * 1000)
+    timeframe_ms = TIMEFRAME_MILLISECONDS[timeframe]
+    completed = frame[frame["timestamp"] + timeframe_ms <= close_cutoff_ms]
+    if completed.empty:
+        return None
+    return completed.iloc[-1]
+
+
 def is_freshly_closed(current: pd.Series, timeframe: str) -> bool:
     """Return True only during the first scan after ``current`` closed.
 
@@ -177,6 +203,22 @@ def find_rsi_signal(frame: pd.DataFrame, timeframe: str) -> Optional[tuple[str, 
     if previous["rsi"] > 70 and current["rsi"] <= 70:
         return "SHORT", previous, current
     return None
+
+
+def passes_rsi_trend_filter(
+    side: str,
+    timeframe: str,
+    rsi_current: pd.Series,
+    ema_current: pd.Series,
+) -> bool:
+    """Apply 1h EMA20 filter only to 15m RSI signals."""
+    if timeframe != "15m":
+        return True
+    price = float(rsi_current["close"])
+    ema20 = float(ema_current["ema20"])
+    if side == "LONG":
+        return price >= ema20
+    return price <= ema20
 
 
 def find_macd_signal(frame: pd.DataFrame, timeframe: str) -> Optional[tuple[str, pd.Series, pd.Series]]:
@@ -363,151 +405,4 @@ def write_workflow_summary(
             summary.write("| 시간봉 | 이전 완료 캔들 (UTC) | 이전 DIF / DEA | 최근 완료 캔들 (UTC) | 최근 DIF / DEA |\n")
             summary.write("| --- | --- | --- | --- | --- |\n")
             for timeframe, previous, current in btc_macd_samples:
-                previous_time = pd.to_datetime(previous["timestamp"], unit="ms", utc=True).strftime("%Y-%m-%d %H:%M")
-                current_time = pd.to_datetime(current["timestamp"], unit="ms", utc=True).strftime("%Y-%m-%d %H:%M")
-                summary.write(
-                    f"| {timeframe} | {previous_time} | {previous['dif']:.4f} / {previous['dea']:.4f} | "
-                    f"{current_time} | {current['dif']:.4f} / {current['dea']:.4f} |\n"
-                )
-        else:
-            summary.write(
-                "\n### BTC 최근 확정 캔들 MACD(12, 26, 9)\n\n"
-                "BTC 완료 캔들 샘플을 만들지 못했습니다. 실행 로그의 `BTC MACD sample` 또는 "
-                "`Failed to check BTC` 항목을 확인하세요.\n"
-            )
-        if btc_stoch_samples:
-            summary.write("\n### BTC 최근 확정 캔들 Stochastic (K,D) - OKX KDJ(14,3,3)\n\n")
-            summary.write("| 시간봉 | 이전 완료 캔들 (UTC) | 이전 K / D | 최근 완료 캔들 (UTC) | 최근 K / D |\n")
-            summary.write("| --- | --- | --- | --- | --- |\n")
-            for timeframe, previous, current in btc_stoch_samples:
-                previous_time = pd.to_datetime(previous["timestamp"], unit="ms", utc=True).strftime("%Y-%m-%d %H:%M")
-                current_time = pd.to_datetime(current["timestamp"], unit="ms", utc=True).strftime("%Y-%m-%d %H:%M")
-                summary.write(
-                    f"| {timeframe} | {previous_time} | {previous['k']:.2f} / {previous['d']:.2f} | "
-                    f"{current_time} | {current['k']:.2f} / {current['d']:.2f} |\n"
-                )
-        else:
-            summary.write(
-                "\n### BTC 최근 확정 캔들 Stochastic (K,D) - OKX KDJ(14,3,3)\n\n"
-                "BTC 완료 캔들 샘플을 만들지 못했습니다. 실행 로그의 `BTC Stochastic sample` 또는 "
-                "`Failed to check BTC` 항목을 확인하세요.\n"
-            )
-
-
-def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-    logging.info("Signal scan started (UTC %s)", pd.Timestamp.now(tz="UTC").isoformat())
-    exchange = create_exchange()
-    exchange.load_markets()
-    logging.info("Loaded %d OKX markets", len(exchange.markets))
-
-    checked_count = 0
-    signal_count = 0
-    error_count = 0
-    btc_rsi_samples: list[tuple[str, pd.Series, pd.Series]] = []
-    btc_macd_samples: list[tuple[str, pd.Series, pd.Series]] = []
-    btc_stoch_samples: list[tuple[str, pd.Series, pd.Series]] = []
-
-    for coin in WATCHLIST:
-        symbol = f"{coin}/USDT:USDT"
-        if symbol not in exchange.markets:
-            logging.warning("OKX market not found: %s", symbol)
-            continue
-
-        for timeframe in TIMEFRAMES:
-            checked_count += 1
-            try:
-                frame = fetch_rsi_frame(exchange, symbol, timeframe)
-                completed_candles = latest_completed_candles(frame, timeframe)
-                if coin == "BTC" and completed_candles:
-                    previous, current = completed_candles
-                    btc_rsi_samples.append((timeframe, previous, current))
-                    logging.info(
-                        "BTC RSI sample (%s): %.2f -> %.2f",
-                        timeframe,
-                        previous["rsi"],
-                        current["rsi"],
-                    )
-                signal = find_rsi_signal(frame, timeframe)
-                if signal:
-                    side, previous, current = signal
-                    send_telegram_message(format_rsi_message(coin, timeframe, side, previous, current))
-                    signal_count += 1
-                    logging.info("Sent RSI %s signal for %s (%s)", side, symbol, timeframe)
-            except (ccxt.BaseError, requests.RequestException, ValueError, RuntimeError) as error:
-                error_count += 1
-                logging.exception("Failed to check RSI %s (%s): %s", symbol, timeframe, error)
-            finally:
-                time.sleep(REQUEST_DELAY_SECONDS)
-
-        for timeframe in MACD_TIMEFRAMES:
-            checked_count += 1
-            try:
-                frame = fetch_macd_frame(exchange, symbol, timeframe)
-                completed_candles = latest_completed_candles(frame, timeframe)
-                if coin == "BTC" and completed_candles:
-                    previous, current = completed_candles
-                    btc_macd_samples.append((timeframe, previous, current))
-                    logging.info(
-                        "BTC MACD sample (%s): DIF %.4f / DEA %.4f -> DIF %.4f / DEA %.4f",
-                        timeframe,
-                        previous["dif"],
-                        previous["dea"],
-                        current["dif"],
-                        current["dea"],
-                    )
-                signal = find_macd_signal(frame, timeframe)
-                if signal:
-                    side, previous, current = signal
-                    send_telegram_message(format_macd_message(coin, timeframe, side, previous, current))
-                    signal_count += 1
-                    logging.info("Sent MACD %s signal for %s (%s)", side, symbol, timeframe)
-            except (ccxt.BaseError, requests.RequestException, ValueError, RuntimeError) as error:
-                error_count += 1
-                logging.exception("Failed to check MACD %s (%s): %s", symbol, timeframe, error)
-            finally:
-                time.sleep(REQUEST_DELAY_SECONDS)
-
-        # Stochastic (KDJ) checks for 1h and 4h only
-        for timeframe in STOCH_TIMEFRAMES:
-            checked_count += 1
-            try:
-                frame = fetch_stoch_frame(exchange, symbol, timeframe)
-                completed_candles = latest_completed_candles(frame, timeframe)
-                if coin == "BTC" and completed_candles:
-                    previous, current = completed_candles
-                    btc_stoch_samples.append((timeframe, previous, current))
-                    logging.info(
-                        "BTC Stochastic sample (%s): K %.2f / D %.2f -> K %.2f / D %.2f",
-                        timeframe,
-                        previous["k"],
-                        previous["d"],
-                        current["k"],
-                        current["d"],
-                    )
-                signal = find_stoch_signal(frame, timeframe)
-                if signal:
-                    side, previous, current = signal
-                    send_telegram_message(format_stoch_message(coin, timeframe, side, previous, current))
-                    signal_count += 1
-                    logging.info("Sent Stochastic %s signal for %s (%s)", side, symbol, timeframe)
-            except (ccxt.BaseError, requests.RequestException, ValueError, RuntimeError) as error:
-                error_count += 1
-                logging.exception("Failed to check Stochastic %s (%s): %s", symbol, timeframe, error)
-            finally:
-                time.sleep(REQUEST_DELAY_SECONDS)
-
-    logging.info(
-        "Signal scan finished: %d checks, %d alerts sent, %d errors",
-        checked_count,
-        signal_count,
-        error_count,
-    )
-    all_checks_failed = bool(checked_count and error_count == checked_count)
-    write_workflow_summary(checked_count, signal_count, error_count, btc_rsi_samples, btc_macd_samples, btc_stoch_samples)
-    if all_checks_failed:
-        raise RuntimeError("Every market check failed; see the errors above.")
-
-
-if __name__ == "__main__":
-    main()
+                previous_time = pd.to_datetime(previous["timestamp"], unit="ms
