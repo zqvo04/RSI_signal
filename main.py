@@ -19,8 +19,8 @@ import requests
 
 # Change this list to add or remove USDT-margined perpetual futures.
 WATCHLIST = [
-    "BTC", "ETH", "SOL", "HYPE", "DOGE", "WLD", "XRP", "PEPE",
-    "LIT", "SUI", "BNB", "LINK", "AVAX", "PENGU", "ONDO",
+    "BTC", "ETH", "SOL", "HYPE", "DOGE", "XRP",
+    "LIT", "SUI", "BNB",
 ]
 TIMEFRAMES = ("15m", "1h", "4h")
 MACD_TIMEFRAMES = ("1h", "4h")
