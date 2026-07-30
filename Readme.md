@@ -4,13 +4,13 @@ OKX USDT 무기한 선물의 RSI(14) 반전 돌파, MACD(12, 26, 9) 골든/데�
 
 ## 감시 대상과 타임프레임
 
-- 코인: BTC, ETH, SOL, HYPE, DOGE, WLD, XRP, PEPE, LIT, SUI, BNB, LINK, AVAX, PENGU, ONDO
-- RSI 타임프레임: `15m`, `1h`, `4h`
+- 코인: BTC, ETH, SOL, HYPE, DOGE, XRP, LIT, SUI, BNB
+- RSI 타임프레임: `15m`, `1h`, `4h` (`15m`은 **BTC, ETH만**)
 - MACD 타임프레임: `1h`, `4h`
 - Stochastic(KDJ) 타임프레임: `1h`, `4h`
 - 거래소: OKX USDT 무기한 선물 (`COIN/USDT:USDT`)
 
-감시 대상은 [main.py](main.py)의 `WATCHLIST`에서 수정할 수 있습니다.
+감시 대상은 [main.py](main.py)의 `WATCHLIST`에서, 15m RSI 대상은 `RSI_15M_COINS`에서 수정할 수 있습니다.
 
 ## 신호 기준
 
@@ -20,6 +20,8 @@ OKX USDT 무기한 선물의 RSI(14) 반전 돌파, MACD(12, 26, 9) 골든/데�
 | --- | --- |
 | LONG | 이전 완료 캔들 RSI가 30 미만이고, 최근 완료 캔들 RSI가 30 이상일 때 |
 | SHORT | 이전 완료 캔들 RSI가 70 초과이고, 최근 완료 캔들 RSI가 70 이하일 때 |
+
+`15m` RSI는 BTC, ETH만 감시합니다. 나머지 코인은 `1h`, `4h` RSI만 검사합니다.
 
 ### MACD (12, 26, 9)
 
@@ -43,11 +45,23 @@ DIF = MACD선, DEA = Signal선입니다.
 
 API 데이터의 결측 행은 지표 계산 전에 제거합니다. 또한 진행 중인 캔들은 사용하지 않습니다. 캔들의 종료 시각에 30초의 여유를 둔 뒤, 완전히 확정된 최근 두 캔들을 사용해 신호를 판정합니다.
 
+### 거래량 필터 (RSI·MACD·Stochastic 공통)
+
+지표 조건을 만족해도, **신호를 발화시키는 캔들**(돌파가 발생한 최근 완료 캔들)의 거래량이 아래 조건을 충족하지 않으면 알림을 보내지 않습니다.
+
+| 항목 | 값 |
+| --- | --- |
+| 비교 기준 | 신호 캔들 **직전** 최근 20개 완료 캔들의 평균 거래량 |
+| 최소 배수 | 1.1배 (`VOLUME_MIN_RATIO`) |
+| 통과 조건 | `신호 캔들 거래량 >= 평균 거래량 × 1.1` |
+
+거래량이 부족하면 신호는 차단되며, 실행 로그에 `Skipped ... volume below 1.1x avg`로 기록됩니다. `VOLUME_AVG_LENGTH`, `VOLUME_MIN_RATIO`는 [main.py](main.py) 상단에서 변경할 수 있습니다.
+
 알림 중요도는 다음과 같이 표시됩니다.
 
 - `4h`: 🔥 높은 신뢰도
 - `1h`: ⚡️ 중간 신뢰도
-- `15m`: 👀 단기 진입 타점 (RSI만 해당)
+- `15m`: 👀 단기 진입 타점 (RSI만 해당, BTC·ETH만)
 
 ## Telegram 알림 예시
 
@@ -79,7 +93,7 @@ API 데이터의 결측 행은 지표 계산 전에 제거합니다. 또한 진�
 
 | 타임프레임 | 발화 시점 | 설명 |
 | --- | --- | --- |
-| `15m` (RSI) | 15분 완성봉마다 | 매 15분 새 캔들이 닫히므로 돌파가 있는 완성봉마다 알림 가능 |
+| `15m` (RSI, BTC·ETH만) | 15분 완성봉마다 | 매 15분 새 캔들이 닫히므로 돌파가 있는 완성봉마다 알림 가능 |
 | `1h` | 완성봉 종료 후 첫 실행(약 정각 +1분) | 이후 3회 스캔은 동일 캔들이므로 건너뜀 |
 | `4h` | 완성봉 종료 후 첫 실행(약 정각 +1분) | 이후 15회 스캔은 동일 캔들이므로 건너뜀 |
 
@@ -87,26 +101,27 @@ API 데이터의 결측 행은 지표 계산 전에 제거합니다. 또한 진�
 
 ## 전체 동작 로직
 
-한 번의 실행(`main.py`의 `main`)은 감시 대상 15개 코인에 대해 RSI 45건 + MACD 30건 + Stochastic 30건, 총 **105건**을 다음 순서로 처리합니다.
+한 번의 실행(`main.py`의 `main`)은 감시 대상 9개 코인에 대해 RSI 20건 + MACD 18건 + Stochastic 18건, 총 **56건**을 다음 순서로 처리합니다.
 
-1. **RSI 검사 (45건)**: 각 코인 × (`15m`, `1h`, `4h`)
+1. **RSI 검사 (20건)**: 각 코인 × (`1h`, `4h`), BTC·ETH 추가 × `15m`
    - OKX 공개 스왑 마켓에서 최근 OHLCV 100개를 가져옵니다(`fetch_rsi_frame`).
    - RSI(14)를 계산하고, 완성 캔들 두 개로 돌파를 판정합니다(`find_rsi_signal`).
-   - 신호가 있으면 Telegram으로 전송합니다(`format_rsi_message`).
+   - 거래량 필터를 통과하면 Telegram으로 전송합니다(`format_rsi_message`).
 
-2. **MACD 검사 (30건)**: 각 코인 × (`1h`, `4h`)
+2. **MACD 검사 (18건)**: 각 코인 × (`1h`, `4h`)
    - OKX 공개 스왑 마켓에서 최근 OHLCV 100개를 가져옵니다(`fetch_macd_frame`).
    - MACD(12, 26, 9)의 DIF·DEA를 계산하고, 완성 캔들 두 개로 골든/데드크로스를 판정합니다(`find_macd_signal`).
-   - 신호가 있으면 Telegram으로 전송합니다(`format_macd_message`).
+   - 거래량 필터를 통과하면 Telegram으로 전송합니다(`format_macd_message`).
 
-3. **Stochastic 검사 (30건)**: 각 코인 × (`1h`, `4h`)
+3. **Stochastic 검사 (18건)**: 각 코인 × (`1h`, `4h`)
    - OKX 공개 스왑 마켓에서 최근 OHLCV 100개를 가져옵니다(`fetch_stoch_frame`).
    - Stochastic(OKX KDJ 14,3,3)의 %K·%D를 계산하고, 완성 캔들 두 개로 골든/데드크로스를 판정합니다(`find_stoch_signal`).
-   - 신호가 있으면 Telegram으로 전송합니다(`format_stoch_message`).
+   - 거래량 필터를 통과하면 Telegram으로 전송합니다(`format_stoch_message`).
 
 4. **공통 처리**
    - **완성 캔들 선별**: 종료 시각에 30초 여유(`CANDLE_CLOSE_GRACE_SECONDS`)를 둬 진행 중인 캔들을 배제하고, 완전히 확정된 최근 두 캔들을 고릅니다(`latest_completed_candles`).
    - **중복 방지**: 돌파 캔들이 방금 닫힌 경우에만 신호를 반환합니다(`is_freshly_closed`).
+   - **거래량 필터**: 신호 캔들 거래량이 직전 20봉 평균의 1.1배 이상일 때만 알림을 보냅니다(`passes_volume_filter`).
    - **알림 전송**: 토큰·채팅 ID는 공백을 제거해 사용하며, Telegram이 오류를 반환하면 응답 본문(예: `chat not found`)을 로그에 남겨 원인을 확인할 수 있습니다.
    - **속도 제한**: 각 검사 사이에 짧은 지연(`REQUEST_DELAY_SECONDS`)을 둬 OKX·Telegram 엔드포인트 부하를 줄입니다.
    - **실행 요약**: 검사 건수·신호 수·오류 수와 BTC의 최근 확정 캔들 RSI·MACD·Stochastic 값을 GitHub Actions Summary에 기록합니다(`write_workflow_summary`). 모든 검사가 실패하면 오류로 마무리합니다.
@@ -165,7 +180,7 @@ Authorization: Bearer ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 2. **Run workflow**로 수동 실행합니다.
 3. 실행 항목의 **Summary** 탭에서 검사 결과를 확인합니다.
 
-Summary에는 검사 건수, 발생 신호 수, 오류 수가 표시됩니다. 정상 환경에서는 RSI 45건 + MACD 30건 + Stochastic 30건, 총 **105건**을 검사합니다. Telegram은 실제 LONG/SHORT 신호가 발생한 경우에만 메시지를 전송합니다.
+Summary에는 검사 건수, 발생 신호 수, 오류 수가 표시됩니다. 정상 환경에서는 RSI 20건 + MACD 18건 + Stochastic 18건, 총 **56건**을 검사합니다. Telegram은 지표 조건과 거래량 필터를 모두 통과한 LONG/SHORT 신호가 발생한 경우에만 메시지를 전송합니다.
 
 ## 로컬 실행
 
