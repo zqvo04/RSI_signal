@@ -23,6 +23,7 @@ WATCHLIST = [
     "LIT", "SUI", "BNB",
 ]
 TIMEFRAMES = ("15m", "1h", "4h")
+RSI_15M_COINS = ("BTC", "ETH")
 MACD_TIMEFRAMES = ("1h", "4h")
 STOCH_TIMEFRAMES = ("1h", "4h")  # KDJ signals only for 1h and 4h as requested
 TIMEFRAME_IMPORTANCE = {
@@ -31,8 +32,6 @@ TIMEFRAME_IMPORTANCE = {
     "15m": "👀",
 }
 RSI_LENGTH = 14
-EMA_LENGTH = 20
-RSI_TREND_FILTER_TIMEFRAME = "1h"
 MACD_FAST = 12
 MACD_SLOW = 26
 MACD_SIGNAL = 9
@@ -40,6 +39,8 @@ MACD_SIGNAL = 9
 STOCH_K = 14
 STOCH_D = 3
 STOCH_SMOOTH = 1  # No smoothing for K (direct calculation)
+VOLUME_AVG_LENGTH = 20
+VOLUME_MIN_RATIO = 1.1
 OHLCV_LIMIT = 100
 REQUEST_DELAY_SECONDS = 0.5
 # The workflow runs one minute after each 15-minute boundary.  This short
@@ -84,19 +85,6 @@ def fetch_rsi_frame(exchange: ccxt.okx, symbol: str, timeframe: str) -> pd.DataF
     frame = frame.sort_values("timestamp").drop_duplicates(subset="timestamp")
     frame["rsi"] = ta.rsi(frame["close"], length=RSI_LENGTH)
     return frame.dropna(subset=["rsi"]).reset_index(drop=True)
-
-
-def fetch_ema_frame(exchange: ccxt.okx, symbol: str, timeframe: str) -> pd.DataFrame:
-    """Fetch OHLCV and calculate EMA(20)."""
-    candles = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=OHLCV_LIMIT)
-    frame = pd.DataFrame(candles, columns=["timestamp", "open", "high", "low", "close", "volume"])
-
-    numeric_columns = ["open", "high", "low", "close", "volume"]
-    frame[numeric_columns] = frame[numeric_columns].apply(pd.to_numeric, errors="coerce")
-    frame = frame.dropna(subset=["timestamp", *numeric_columns]).copy()
-    frame = frame.sort_values("timestamp").drop_duplicates(subset="timestamp")
-    frame["ema20"] = ta.ema(frame["close"], length=EMA_LENGTH)
-    return frame.dropna(subset=["ema20"]).reset_index(drop=True)
 
 
 def fetch_macd_frame(exchange: ccxt.okx, symbol: str, timeframe: str) -> pd.DataFrame:
@@ -163,17 +151,6 @@ def latest_completed_candles(frame: pd.DataFrame, timeframe: str) -> Optional[tu
     return completed.iloc[-2], completed.iloc[-1]
 
 
-def latest_completed_candle(frame: pd.DataFrame, timeframe: str) -> Optional[pd.Series]:
-    """Return the latest confirmed, closed candle for a timeframe."""
-    now_ms = int(time.time() * 1000)
-    close_cutoff_ms = now_ms - (CANDLE_CLOSE_GRACE_SECONDS * 1000)
-    timeframe_ms = TIMEFRAME_MILLISECONDS[timeframe]
-    completed = frame[frame["timestamp"] + timeframe_ms <= close_cutoff_ms]
-    if completed.empty:
-        return None
-    return completed.iloc[-1]
-
-
 def is_freshly_closed(current: pd.Series, timeframe: str) -> bool:
     """Return True only during the first scan after ``current`` closed.
 
@@ -185,6 +162,27 @@ def is_freshly_closed(current: pd.Series, timeframe: str) -> bool:
     now_ms = int(time.time() * 1000)
     close_ms = int(current["timestamp"]) + TIMEFRAME_MILLISECONDS[timeframe]
     return now_ms - close_ms < SCAN_INTERVAL_SECONDS * 1000
+
+
+def passes_volume_filter(frame: pd.DataFrame, timeframe: str, signal_candle: pd.Series) -> bool:
+    """Return True when the signal candle volume is >= recent average * VOLUME_MIN_RATIO."""
+    now_ms = int(time.time() * 1000)
+    close_cutoff_ms = now_ms - (CANDLE_CLOSE_GRACE_SECONDS * 1000)
+    timeframe_ms = TIMEFRAME_MILLISECONDS[timeframe]
+    completed = frame[frame["timestamp"] + timeframe_ms <= close_cutoff_ms]
+    if len(completed) < VOLUME_AVG_LENGTH + 1:
+        return False
+
+    if int(completed.iloc[-1]["timestamp"]) != int(signal_candle["timestamp"]):
+        return False
+
+    prior_volumes = completed.iloc[-(VOLUME_AVG_LENGTH + 1):-1]["volume"]
+    avg_volume = float(prior_volumes.mean())
+    if avg_volume <= 0:
+        return False
+
+    signal_volume = float(signal_candle["volume"])
+    return signal_volume >= avg_volume * VOLUME_MIN_RATIO
 
 
 def find_rsi_signal(frame: pd.DataFrame, timeframe: str) -> Optional[tuple[str, pd.Series, pd.Series]]:
@@ -203,22 +201,6 @@ def find_rsi_signal(frame: pd.DataFrame, timeframe: str) -> Optional[tuple[str, 
     if previous["rsi"] > 70 and current["rsi"] <= 70:
         return "SHORT", previous, current
     return None
-
-
-def passes_rsi_trend_filter(
-    side: str,
-    timeframe: str,
-    rsi_current: pd.Series,
-    ema_current: pd.Series,
-) -> bool:
-    """Apply 1h EMA20 filter only to 15m RSI signals."""
-    if timeframe != "15m":
-        return True
-    price = float(rsi_current["close"])
-    ema20 = float(ema_current["ema20"])
-    if side == "LONG":
-        return price >= ema20
-    return price <= ema20
 
 
 def find_macd_signal(frame: pd.DataFrame, timeframe: str) -> Optional[tuple[str, pd.Series, pd.Series]]:
@@ -456,25 +438,9 @@ def main() -> None:
             logging.warning("OKX market not found: %s", symbol)
             continue
 
-        rsi_trend_ema_current: Optional[pd.Series] = None
-        try:
-            ema_frame = fetch_ema_frame(exchange, symbol, RSI_TREND_FILTER_TIMEFRAME)
-            rsi_trend_ema_current = latest_completed_candle(ema_frame, RSI_TREND_FILTER_TIMEFRAME)
-            if rsi_trend_ema_current is None:
-                logging.warning(
-                    "No completed EMA sample for %s (%s); 15m RSI trend filter disabled",
-                    symbol,
-                    RSI_TREND_FILTER_TIMEFRAME,
-                )
-        except (ccxt.BaseError, ValueError) as error:
-            logging.exception(
-                "Failed to prepare EMA trend filter for %s (%s): %s",
-                symbol,
-                RSI_TREND_FILTER_TIMEFRAME,
-                error,
-            )
-
         for timeframe in TIMEFRAMES:
+            if timeframe == "15m" and coin not in RSI_15M_COINS:
+                continue
             checked_count += 1
             try:
                 frame = fetch_rsi_frame(exchange, symbol, timeframe)
@@ -491,23 +457,19 @@ def main() -> None:
                 signal = find_rsi_signal(frame, timeframe)
                 if signal:
                     side, previous, current = signal
-                    if not (
-                        timeframe == "15m"
-                        and rsi_trend_ema_current is not None
-                        and not passes_rsi_trend_filter(side, timeframe, current, rsi_trend_ema_current)
-                    ):
+                    if passes_volume_filter(frame, timeframe, current):
                         send_telegram_message(format_rsi_message(coin, timeframe, side, previous, current))
                         signal_count += 1
                         logging.info("Sent RSI %s signal for %s (%s)", side, symbol, timeframe)
                     else:
                         logging.info(
-                            "Skipped RSI %s signal for %s (%s): price %.4f vs EMA20 %.4f (%s)",
+                            "Skipped RSI %s signal for %s (%s): volume %.4f below %.1fx avg (last %d candles)",
                             side,
                             symbol,
                             timeframe,
-                            float(current["close"]),
-                            float(rsi_trend_ema_current["ema20"]),
-                            RSI_TREND_FILTER_TIMEFRAME,
+                            float(current["volume"]),
+                            VOLUME_MIN_RATIO,
+                            VOLUME_AVG_LENGTH,
                         )
             except (ccxt.BaseError, requests.RequestException, ValueError, RuntimeError) as error:
                 error_count += 1
@@ -534,9 +496,20 @@ def main() -> None:
                 signal = find_macd_signal(frame, timeframe)
                 if signal:
                     side, previous, current = signal
-                    send_telegram_message(format_macd_message(coin, timeframe, side, previous, current))
-                    signal_count += 1
-                    logging.info("Sent MACD %s signal for %s (%s)", side, symbol, timeframe)
+                    if passes_volume_filter(frame, timeframe, current):
+                        send_telegram_message(format_macd_message(coin, timeframe, side, previous, current))
+                        signal_count += 1
+                        logging.info("Sent MACD %s signal for %s (%s)", side, symbol, timeframe)
+                    else:
+                        logging.info(
+                            "Skipped MACD %s signal for %s (%s): volume %.4f below %.1fx avg (last %d candles)",
+                            side,
+                            symbol,
+                            timeframe,
+                            float(current["volume"]),
+                            VOLUME_MIN_RATIO,
+                            VOLUME_AVG_LENGTH,
+                        )
             except (ccxt.BaseError, requests.RequestException, ValueError, RuntimeError) as error:
                 error_count += 1
                 logging.exception("Failed to check MACD %s (%s): %s", symbol, timeframe, error)
@@ -563,9 +536,20 @@ def main() -> None:
                 signal = find_stoch_signal(frame, timeframe)
                 if signal:
                     side, previous, current = signal
-                    send_telegram_message(format_stoch_message(coin, timeframe, side, previous, current))
-                    signal_count += 1
-                    logging.info("Sent Stochastic %s signal for %s (%s)", side, symbol, timeframe)
+                    if passes_volume_filter(frame, timeframe, current):
+                        send_telegram_message(format_stoch_message(coin, timeframe, side, previous, current))
+                        signal_count += 1
+                        logging.info("Sent Stochastic %s signal for %s (%s)", side, symbol, timeframe)
+                    else:
+                        logging.info(
+                            "Skipped Stochastic %s signal for %s (%s): volume %.4f below %.1fx avg (last %d candles)",
+                            side,
+                            symbol,
+                            timeframe,
+                            float(current["volume"]),
+                            VOLUME_MIN_RATIO,
+                            VOLUME_AVG_LENGTH,
+                        )
             except (ccxt.BaseError, requests.RequestException, ValueError, RuntimeError) as error:
                 error_count += 1
                 logging.exception("Failed to check Stochastic %s (%s): %s", symbol, timeframe, error)
