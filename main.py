@@ -23,7 +23,7 @@ WATCHLIST = [
     "LIT", "SUI", "BNB",
 ]
 TIMEFRAMES = ("15m", "1h", "4h")
-RSI_15M_COINS = ("BTC", "ETH")
+RSI_15M_COINS = ("BTC", "ETH", "HYPE")
 MACD_TIMEFRAMES = ("1h", "4h")
 STOCH_TIMEFRAMES = ("1h", "4h")  # KDJ signals only for 1h and 4h as requested
 TIMEFRAME_IMPORTANCE = {
