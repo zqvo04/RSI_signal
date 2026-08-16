@@ -27,6 +27,8 @@ WATCHLIST = [
 ]
 TIMEFRAMES = ("15m", "1h", "4h")
 RSI_15M_COINS = ("BTC", "ETH")
+MFI_15M_COINS = ("BTC", "ETH")
+PSAR_COINS = ("BTC", "ETH", "SOL", "BNB")
 MACD_TIMEFRAMES = ("1h", "4h")
 STOCH_TIMEFRAMES = ("1h", "4h")
 ENGULFING_TIMEFRAMES = ("1h", "4h")
@@ -54,6 +56,10 @@ VOLUME_MIN_RATIO = 1.1
 ENGULFING_VOLUME_RATIO = 1.4
 EMA_VOLUME_RATIO = 1.2
 VWAP_VOLUME_RATIO = 1.3
+SUPERTREND_VOLUME_RATIO = 1.2
+BB_SQUEEZE_VOLUME_RATIO = 1.3
+MFI_VOLUME_RATIO = 1.1
+PSAR_VOLUME_RATIO = 1.2
 OHLCV_LIMIT = 100
 REQUEST_DELAY_SECONDS = 0.5
 CANDLE_CLOSE_GRACE_SECONDS = 30
@@ -68,6 +74,7 @@ ENGULFING_LOOKBACK = {"1h": 8, "4h": 5}
 VWAP_WINDOW = {"1h": 24, "4h": 6}
 VWAP_BREAKOUT_STRENGTH = {"1h": 1.003, "4h": 1.0015}
 VWAP_BREAKDOWN_STRENGTH = {"1h": 0.997, "4h": 0.9985}
+OKX_BAR = {"15m": "15m", "1h": "1H", "4h": "4H"}
 
 
 def create_exchange() -> ccxt.okx:
@@ -96,7 +103,32 @@ def completed_candles(frame: pd.DataFrame, timeframe: str) -> pd.DataFrame:
     now_ms = int(time.time() * 1000)
     close_cutoff_ms = now_ms - (CANDLE_CLOSE_GRACE_SECONDS * 1000)
     timeframe_ms = TIMEFRAME_MILLISECONDS[timeframe]
-    return frame[frame["timestamp"] + timeframe_ms <= close_cutoff_ms].copy()
+    completed = frame[frame["timestamp"] + timeframe_ms <= close_cutoff_ms]
+    if "confirm" in completed:
+        completed = completed[completed["confirm"].astype(str) == "1"]
+    return completed.copy()
+
+
+def fetch_confirmed_frame(exchange: ccxt.okx, symbol: str, timeframe: str) -> pd.DataFrame:
+    """Fetch OKX history candles, retaining its authoritative ``confirm`` field."""
+    market = exchange.market(symbol)
+    response = exchange.publicGetMarketHistoryCandles(
+        {"instId": market["id"], "bar": OKX_BAR[timeframe], "limit": str(OHLCV_LIMIT)}
+    )
+    if response.get("code") not in (None, "0", 0):
+        raise RuntimeError(f"OKX history-candles failed: {response.get('msg', response)}")
+    rows = response.get("data", [])
+    frame = pd.DataFrame(
+        rows, columns=["timestamp", "open", "high", "low", "close", "volume", "vol_ccy", "vol_quote", "confirm"]
+    )
+    if frame.empty:
+        return frame
+    frame = _prepare_ohlcv_frame(frame[["timestamp", "open", "high", "low", "close", "volume"]].values.tolist())
+    # The endpoint is reverse chronological; reattach confirmation by timestamp.
+    confirms = pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume", "vol_ccy", "vol_quote", "confirm"])[["timestamp", "confirm"]]
+    confirms["timestamp"] = pd.to_numeric(confirms["timestamp"], errors="coerce")
+    frame["timestamp"] = pd.to_numeric(frame["timestamp"], errors="coerce")
+    return frame.merge(confirms, on="timestamp", how="left").sort_values("timestamp").reset_index(drop=True)
 
 
 def fetch_rsi_frame(exchange: ccxt.okx, symbol: str, timeframe: str) -> pd.DataFrame:
@@ -521,6 +553,159 @@ def find_vwap_signal(frame: pd.DataFrame, timeframe: str) -> Optional[tuple[str,
     return None
 
 
+def fetch_supertrend_frame(exchange: ccxt.okx, symbol: str, timeframe: str) -> pd.DataFrame:
+    frame = fetch_confirmed_frame(exchange, symbol, timeframe)
+    frame["atr10"] = ta.atr(frame["high"], frame["low"], frame["close"], length=10)
+    midpoint = (frame["high"] + frame["low"]) / 2
+    upper = midpoint + frame["atr10"] * 3.0
+    lower = midpoint - frame["atr10"] * 3.0
+    supertrend = pd.Series(index=frame.index, dtype=float)
+    trend_up = pd.Series(index=frame.index, dtype=bool)
+    for index in range(len(frame)):
+        if pd.isna(frame.at[index, "atr10"]):
+            continue
+        if index == 0 or pd.isna(supertrend.iloc[index - 1]):
+            supertrend.iloc[index] = lower.iloc[index]
+            trend_up.iloc[index] = True
+            continue
+        previous_trend_up = bool(trend_up.iloc[index - 1])
+        previous_supertrend = float(supertrend.iloc[index - 1])
+        close = float(frame.at[index, "close"])
+        if previous_trend_up:
+            trend_up.iloc[index] = close >= previous_supertrend
+            supertrend.iloc[index] = max(float(lower.iloc[index]), previous_supertrend) if trend_up.iloc[index] else float(upper.iloc[index])
+        else:
+            trend_up.iloc[index] = close > previous_supertrend
+            supertrend.iloc[index] = float(lower.iloc[index]) if trend_up.iloc[index] else min(float(upper.iloc[index]), previous_supertrend)
+    frame["supertrend"] = supertrend
+    return frame.dropna(subset=["atr10", "supertrend"]).reset_index(drop=True)
+
+
+def fetch_bb_squeeze_frame(exchange: ccxt.okx, symbol: str, timeframe: str) -> pd.DataFrame:
+    frame = fetch_confirmed_frame(exchange, symbol, timeframe)
+    sma = frame["close"].rolling(20).mean()
+    std = frame["close"].rolling(20).std(ddof=0)
+    frame["bb_upper"] = sma + std * 2
+    frame["bb_lower"] = sma - std * 2
+    frame["bb_width"] = frame["bb_upper"] - frame["bb_lower"]
+    frame["atr14"] = ta.atr(frame["high"], frame["low"], frame["close"], length=14)
+    return frame.dropna(subset=["bb_upper", "bb_lower", "bb_width", "atr14"]).reset_index(drop=True)
+
+
+def fetch_mfi_frame(exchange: ccxt.okx, symbol: str, timeframe: str) -> pd.DataFrame:
+    frame = fetch_confirmed_frame(exchange, symbol, timeframe)
+    typical = (frame["high"] + frame["low"] + frame["close"]) / 3
+    flow = typical * frame["volume"]
+    positive = flow.where(typical > typical.shift(1), 0.0)
+    negative = flow.where(typical < typical.shift(1), 0.0)
+    positive_sum = positive.rolling(14).sum()
+    negative_sum = negative.rolling(14).sum()
+    frame["mfi"] = 100 - (100 / (1 + positive_sum / negative_sum))
+    frame.loc[negative_sum == 0, "mfi"] = 100.0
+    return frame.dropna(subset=["mfi"]).reset_index(drop=True)
+
+
+def fetch_parabolic_sar_frame(exchange: ccxt.okx, symbol: str, timeframe: str) -> pd.DataFrame:
+    frame = fetch_confirmed_frame(exchange, symbol, timeframe)
+    if len(frame) < 2:
+        return frame
+    sar = pd.Series(index=frame.index, dtype=float)
+    uptrend = bool(frame.at[1, "close"] >= frame.at[0, "close"])
+    sar.iloc[0] = float(frame.at[0, "low"] if uptrend else frame.at[0, "high"])
+    ep = float(frame.at[0, "high"] if uptrend else frame.at[0, "low"])
+    af = 0.02
+    for index in range(1, len(frame)):
+        candidate = float(sar.iloc[index - 1]) + af * (ep - float(sar.iloc[index - 1]))
+        if uptrend:
+            candidate = min(candidate, float(frame.iloc[index - 1]["low"]), float(frame.iloc[max(0, index - 2)]["low"]))
+            if float(frame.iloc[index]["low"]) < candidate:
+                uptrend, sar.iloc[index], ep, af = False, ep, float(frame.iloc[index]["low"]), 0.02
+            else:
+                sar.iloc[index] = candidate
+                if float(frame.iloc[index]["high"]) > ep:
+                    ep, af = float(frame.iloc[index]["high"]), min(af + 0.02, 0.2)
+        else:
+            candidate = max(candidate, float(frame.iloc[index - 1]["high"]), float(frame.iloc[max(0, index - 2)]["high"]))
+            if float(frame.iloc[index]["high"]) > candidate:
+                uptrend, sar.iloc[index], ep, af = True, ep, float(frame.iloc[index]["high"]), 0.02
+            else:
+                sar.iloc[index] = candidate
+                if float(frame.iloc[index]["low"]) < ep:
+                    ep, af = float(frame.iloc[index]["low"]), min(af + 0.02, 0.2)
+    frame["psar"] = sar
+    frame["atr14"] = ta.atr(frame["high"], frame["low"], frame["close"], length=14)
+    return frame.dropna(subset=["psar", "atr14"]).reset_index(drop=True)
+
+
+def _new_indicator_pair(frame: pd.DataFrame, timeframe: str, minimum: int) -> Optional[tuple[pd.DataFrame, pd.Series, pd.Series]]:
+    completed = completed_candles(frame, timeframe)
+    if len(completed) < minimum:
+        return None
+    previous, current = completed.iloc[-2], completed.iloc[-1]
+    return (completed, previous, current) if is_freshly_closed(current, timeframe) else None
+
+
+def check_supertrend(df: pd.DataFrame, timeframe: str, coin: str):
+    pair = _new_indicator_pair(df, timeframe, 21)
+    if not pair:
+        return None
+    completed, previous, current = pair
+    prior_three = completed.iloc[-4:-1]
+    st = float(current["supertrend"])
+    bullish = float(current["close"]) > float(current["open"])
+    bearish = float(current["close"]) < float(current["open"])
+    strength = abs(float(current["close"]) - st) >= float(current["atr10"]) * .2
+    if float(previous["close"]) <= float(previous["supertrend"]) and float(current["close"]) > st and bullish and strength and all(prior_three["close"] <= prior_three["supertrend"]):
+        return "Supertrend", "LONG", {"previous": previous, "current": current}
+    if float(previous["close"]) >= float(previous["supertrend"]) and float(current["close"]) < st and bearish and strength and all(prior_three["close"] >= prior_three["supertrend"]):
+        return "Supertrend", "SHORT", {"previous": previous, "current": current}
+    return None
+
+
+def check_bb_squeeze(df: pd.DataFrame, timeframe: str, coin: str):
+    pair = _new_indicator_pair(df, timeframe, 31)
+    if not pair:
+        return None
+    completed, previous, current = pair
+    squeeze = completed.iloc[-11:-1]
+    if (squeeze["bb_width"] <= squeeze["atr14"] * 1.5).sum() < 8:
+        return None
+    prior_four = completed.iloc[-5:-1]
+    close, open_ = float(current["close"]), float(current["open"])
+    if all(prior_four["close"] <= prior_four["bb_upper"]) and close > float(current["bb_upper"]) and close > open_ and close - float(current["bb_upper"]) >= float(current["atr14"]) * .15:
+        return "BB Squeeze", "LONG", {"previous": previous, "current": current}
+    if all(prior_four["close"] >= prior_four["bb_lower"]) and close < float(current["bb_lower"]) and close < open_ and float(current["bb_lower"]) - close >= float(current["atr14"]) * .15:
+        return "BB Squeeze", "SHORT", {"previous": previous, "current": current}
+    return None
+
+
+def check_mfi(df: pd.DataFrame, timeframe: str, coin: str):
+    pair = _new_indicator_pair(df, timeframe, 21)
+    if not pair:
+        return None
+    _, previous, current = pair
+    mfi, prev_mfi = float(current["mfi"]), float(previous["mfi"])
+    if prev_mfi < 20 <= mfi and mfi - 20 >= 2 and float(current["close"]) > float(current["open"]):
+        return "MFI", "LONG", {"previous": previous, "current": current}
+    if prev_mfi > 80 >= mfi and 80 - mfi >= 2 and float(current["close"]) < float(current["open"]):
+        return "MFI", "SHORT", {"previous": previous, "current": current}
+    return None
+
+
+def check_parabolic_sar(df: pd.DataFrame, timeframe: str, coin: str):
+    pair = _new_indicator_pair(df, timeframe, 21)
+    if not pair:
+        return None
+    completed, previous, current = pair
+    prior_three = completed.iloc[-4:-1]
+    psar, close, open_ = float(current["psar"]), float(current["close"]), float(current["open"])
+    if float(previous["close"]) < float(previous["psar"]) and close > psar and close > open_ and close - psar >= float(current["atr14"]) * .15 and all(prior_three["close"] < prior_three["psar"]):
+        return "Parabolic SAR", "LONG", {"previous": previous, "current": current}
+    if float(previous["close"]) > float(previous["psar"]) and close < psar and close < open_ and psar - close >= float(current["atr14"]) * .15 and all(prior_three["close"] > prior_three["psar"]):
+        return "Parabolic SAR", "SHORT", {"previous": previous, "current": current}
+    return None
+
+
 def send_telegram_message(message: str) -> None:
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
@@ -601,6 +786,12 @@ def format_vwap_message(coin: str, timeframe: str, position: str) -> str:
         f"- 코인: {coin}\n"
         f"- 포지션: {position_label}"
     )
+
+
+def format_indicator_message(label: str, coin: str, timeframe: str, side: str) -> str:
+    importance = TIMEFRAME_IMPORTANCE[timeframe]
+    position = "📈 LONG" if side == "LONG" else "📉 SHORT"
+    return f"🚨 [{timeframe}] {label} 신호 발생{importance}\n- 코인: {coin}\n- 포지션: {position}"
 
 
 def write_workflow_summary(
@@ -721,6 +912,20 @@ def _process_signal_check(
     return True
 
 
+def _process_new_indicator_check(label: str, coin: str, timeframe: str, frame: pd.DataFrame, checker, volume_ratio: float) -> bool:
+    """Run a new indicator checker returning (type, direction, details)."""
+    signal = checker(frame, timeframe, coin)
+    if not signal:
+        return False
+    _, side, details = signal
+    current = details["current"]
+    if not passes_volume_filter(frame, timeframe, current, min_ratio=volume_ratio):
+        return False
+    send_telegram_message(format_indicator_message(label, coin, timeframe, side))
+    logging.info("Sent %s %s signal for %s (%s)", label, side, coin, timeframe)
+    return True
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     logging.info("Signal scan started (UTC %s)", pd.Timestamp.now(tz="UTC").isoformat())
@@ -738,6 +943,10 @@ def main() -> None:
         "Engulfing": {"checked": 0, "signals": 0},
         "EMA Cross": {"checked": 0, "signals": 0},
         "VWAP Cross": {"checked": 0, "signals": 0},
+        "Supertrend": {"checked": 0, "signals": 0},
+        "BB Squeeze": {"checked": 0, "signals": 0},
+        "MFI": {"checked": 0, "signals": 0},
+        "Parabolic SAR": {"checked": 0, "signals": 0},
     }
     btc_rsi_samples: list[tuple[str, pd.Series, pd.Series]] = []
     btc_macd_samples: list[tuple[str, pd.Series, pd.Series]] = []
@@ -922,6 +1131,65 @@ def main() -> None:
                 except (ccxt.BaseError, requests.RequestException, ValueError, RuntimeError) as error:
                     error_count += 1
                     logging.exception("Failed to check VWAP Cross %s (%s): %s", symbol, timeframe, error)
+                finally:
+                    time.sleep(REQUEST_DELAY_SECONDS)
+
+        for timeframe in ("1h", "4h"):
+            checked_count += 1
+            signal_breakdown["Supertrend"]["checked"] += 1
+            try:
+                frame = fetch_supertrend_frame(exchange, symbol, timeframe)
+                if _process_new_indicator_check("Supertrend", coin, timeframe, frame, check_supertrend, SUPERTREND_VOLUME_RATIO):
+                    signal_count += 1
+                    signal_breakdown["Supertrend"]["signals"] += 1
+            except (ccxt.BaseError, requests.RequestException, ValueError, RuntimeError, KeyError) as error:
+                error_count += 1
+                logging.exception("Failed to check Supertrend %s (%s): %s", symbol, timeframe, error)
+            finally:
+                time.sleep(REQUEST_DELAY_SECONDS)
+
+        for timeframe in ("1h", "4h"):
+            checked_count += 1
+            signal_breakdown["BB Squeeze"]["checked"] += 1
+            try:
+                frame = fetch_bb_squeeze_frame(exchange, symbol, timeframe)
+                if _process_new_indicator_check("BB Squeeze Breakout", coin, timeframe, frame, check_bb_squeeze, BB_SQUEEZE_VOLUME_RATIO):
+                    signal_count += 1
+                    signal_breakdown["BB Squeeze"]["signals"] += 1
+            except (ccxt.BaseError, requests.RequestException, ValueError, RuntimeError, KeyError) as error:
+                error_count += 1
+                logging.exception("Failed to check BB Squeeze %s (%s): %s", symbol, timeframe, error)
+            finally:
+                time.sleep(REQUEST_DELAY_SECONDS)
+
+        for timeframe in TIMEFRAMES:
+            if timeframe == "15m" and coin not in MFI_15M_COINS:
+                continue
+            checked_count += 1
+            signal_breakdown["MFI"]["checked"] += 1
+            try:
+                frame = fetch_mfi_frame(exchange, symbol, timeframe)
+                if _process_new_indicator_check("MFI", coin, timeframe, frame, check_mfi, MFI_VOLUME_RATIO):
+                    signal_count += 1
+                    signal_breakdown["MFI"]["signals"] += 1
+            except (ccxt.BaseError, requests.RequestException, ValueError, RuntimeError, KeyError) as error:
+                error_count += 1
+                logging.exception("Failed to check MFI %s (%s): %s", symbol, timeframe, error)
+            finally:
+                time.sleep(REQUEST_DELAY_SECONDS)
+
+        if coin in PSAR_COINS:
+            for timeframe in ("1h", "4h"):
+                checked_count += 1
+                signal_breakdown["Parabolic SAR"]["checked"] += 1
+                try:
+                    frame = fetch_parabolic_sar_frame(exchange, symbol, timeframe)
+                    if _process_new_indicator_check("Parabolic SAR", coin, timeframe, frame, check_parabolic_sar, PSAR_VOLUME_RATIO):
+                        signal_count += 1
+                        signal_breakdown["Parabolic SAR"]["signals"] += 1
+                except (ccxt.BaseError, requests.RequestException, ValueError, RuntimeError, KeyError) as error:
+                    error_count += 1
+                    logging.exception("Failed to check Parabolic SAR %s (%s): %s", symbol, timeframe, error)
                 finally:
                     time.sleep(REQUEST_DELAY_SECONDS)
 

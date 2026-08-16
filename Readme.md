@@ -10,8 +10,8 @@ OKX USDT 무기한 선물의 기술적 신호를 감지해 Telegram으로 알려
 | 항목 | 내용 |
 | --- | --- |
 | 감시 코인 | BTC, ETH, SOL, HYPE, DOGE, XRP, LIT, SUI, BNB (9개) |
-| 신호 종류 | RSI · MACD · Stochastic · Engulfing · EMA Cross · VWAP Cross |
-| 1회 검사 | **102건** (코인 × 타임프레임 × 신호 조합) |
+| 신호 종류 | RSI · MACD · Stochastic · Engulfing · EMA Cross · VWAP Cross · Supertrend · BB Squeeze · MFI · Parabolic SAR |
+| 1회 검사 | **166건** (코인 × 타임프레임 × 신호 조합) |
 | 실행 주기 | 15분마다 (외부 크론 → GitHub Actions) |
 | 거래소 | OKX USDT 무기한 선물 (`COIN/USDT:USDT`) |
 
@@ -25,8 +25,12 @@ OKX USDT 무기한 선물의 기술적 신호를 감지해 Telegram으로 알려
 | Engulfing | 1h, 4h | 9코인 | 18 |
 | EMA Cross(8/21) | 1h, 4h | 9코인 | 18 |
 | VWAP Cross | 1h, 4h | BTC, ETH, SOL, BNB, XRP | 10 |
+| Supertrend (ATR 10, 3.0) | 1h, 4h | 9코인 | 18 |
+| BB Squeeze Breakout | 1h, 4h | 9코인 | 18 |
+| MFI(14) | 15m, 1h, 4h | 9코인 (15m는 BTC·ETH만) | 20 |
+| Parabolic SAR | 1h, 4h | BTC, ETH, SOL, BNB | 8 |
 
-감시 대상은 [main.py](main.py) 상단의 `WATCHLIST`, `RSI_15M_COINS`, `VWAP_COINS`에서 수정할 수 있습니다.
+감시 대상은 [main.py](main.py) 상단의 `WATCHLIST`, `RSI_15M_COINS`, `MFI_15M_COINS`, `VWAP_COINS`, `PSAR_COINS`에서 수정할 수 있습니다.
 
 ---
 
@@ -38,6 +42,7 @@ OKX USDT 무기한 선물의 기술적 신호를 감지해 Telegram으로 알려
 
 - 진행 중인 캔들은 사용하지 않습니다.
 - 캔들 종료 시각 + **30초 여유**(`CANDLE_CLOSE_GRACE_SECONDS`) 후, 확정된 최근 **2개** 완료 캔들로 신호를 판정합니다.
+- 새 지표 4종은 OKX `/api/v5/market/history-candles`의 `confirm = "1"`인 캔들만 사용합니다.
 
 ### 2. 중복 알림 방지
 
@@ -60,6 +65,9 @@ OKX USDT 무기한 선물의 기술적 신호를 감지해 Telegram으로 알려
 | EMA Cross | 1.2× |
 | VWAP Cross | 1.3× + 직전 3봉 평균 초과 |
 | Engulfing | 1.4× |
+| Supertrend · Parabolic SAR | 1.2× |
+| BB Squeeze Breakout | 1.3× |
+| MFI | 1.1× |
 
 ### 신뢰도 태그
 
@@ -145,6 +153,58 @@ TypicalPrice = (High + Low + Close) / 3
 
 ---
 
+### Supertrend (ATR 10, 배수 3.0)
+
+`Upper Band = (High + Low) / 2 + ATR(10) × 3.0`  
+`Lower Band = (High + Low) / 2 − ATR(10) × 3.0`
+
+| 방향 | 핵심 조건 |
+| --- | --- |
+| 📈 LONG | Close가 Supertrend를 아래→위 돌파하고 양봉 |
+| 📉 SHORT | Close가 Supertrend를 위→아래 돌파하고 음봉 |
+
+**추가 필터:** 돌파 강도 ≥ ATR(10) × 0.2 · 직전 3봉이 돌파 전 추세 방향 유지 · 거래량 1.2×
+
+---
+
+### Bollinger Bands %B + Squeeze Breakout
+
+20주기 SMA와 표준편차(σ)로 밴드를 계산합니다. `Upper = SMA20 + 2σ`, `Lower = SMA20 − 2σ`입니다.
+
+| 방향 | 핵심 조건 |
+| --- | --- |
+| 📈 LONG | 직전 4봉이 Upper Band 이하이며, Close가 Upper Band를 상향 돌파하고 양봉 |
+| 📉 SHORT | 직전 4봉이 Lower Band 이상이며, Close가 Lower Band를 하향 돌파하고 음봉 |
+
+**Squeeze 조건:** 최근 신호봉 직전 10봉 중 8봉 이상이 `BB Width ≤ ATR(14) × 1.5`여야 합니다.  
+**추가 필터:** 돌파 강도 ≥ ATR(14) × 0.15 · 거래량 1.3×
+
+---
+
+### MFI (Money Flow Index, 14)
+
+Typical Price = `(High + Low + Close) / 3`, Raw Money Flow = `Typical Price × vol` (OKX base currency 거래량)입니다.
+
+| 방향 | 조건 |
+| --- | --- |
+| 📈 LONG | 이전 MFI < 20 → 최근 MFI ≥ 20, 최근 양봉 |
+| 📉 SHORT | 이전 MFI > 80 → 최근 MFI ≤ 80, 최근 음봉 |
+
+**추가 필터:** 임계값으로부터 MFI 2 이상 이탈 · 거래량 1.1×. `15m`은 BTC·ETH만 감시합니다.
+
+---
+
+### Parabolic SAR (AF 0.02, 최대 0.2)
+
+| 방향 | 핵심 조건 |
+| --- | --- |
+| 📈 LONG | Close가 PSAR을 아래→위 돌파하고 양봉 |
+| 📉 SHORT | Close가 PSAR을 위→아래 돌파하고 음봉 |
+
+**추가 필터:** 직전 3봉이 돌파 전 추세 방향 유지 · 돌파 강도 ≥ ATR(14) × 0.15 · 거래량 1.2×
+
+---
+
 ## Telegram 알림 예시
 
 ```
@@ -171,15 +231,22 @@ TypicalPrice = (High + Low + Close) / 3
 - 포지션: 📈 LONG
 ```
 
+```
+🚨 [4h] BB Squeeze Breakout 신호 발생🔥
+- 코인: BTC
+- 포지션: 📈 LONG
+```
+
 ---
 
 ## 실행 흐름
 
-한 번의 실행(`python main.py`)은 아래 순서로 **102건**을 처리합니다.
+한 번의 실행(`python main.py`)은 아래 순서로 **166건**을 처리합니다.
 
 ```
 RSI (20) → MACD (18) → Stochastic (18)
   → Engulfing (18) → EMA Cross (18) → VWAP Cross (10)
+  → Supertrend (18) → BB Squeeze (18) → MFI (20) → Parabolic SAR (8)
 ```
 
 각 검사마다:
@@ -191,7 +258,7 @@ RSI (20) → MACD (18) → Stochastic (18)
 
 개별 코인/타임프레임에서 오류가 나도 **나머지 검사는 계속** 진행됩니다.
 
-GitHub Actions Summary에는 총 검사·발생·오류 건수와 **신호별 breakdown**, BTC 최근 확정 캔들 RSI/MACD/Stochastic 값이 기록됩니다.
+GitHub Actions Summary에는 총 검사·발생·오류 건수와 **10개 신호별 breakdown**, BTC 최근 확정 캔들 RSI/MACD/Stochastic 값이 기록됩니다.
 
 ---
 
@@ -245,7 +312,7 @@ Fine-grained PAT는 `RSI_signal` 저장소만 선택하고, `Contents: Read and 
 
 1. GitHub **Actions** → `RSI Telegram Signal Bot` 선택
 2. **Run workflow**로 수동 실행
-3. **Summary** 탭에서 102건 검사 결과 확인
+3. **Summary** 탭에서 166건 검사 결과 확인
 
 ---
 
