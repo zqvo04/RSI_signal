@@ -12,7 +12,7 @@ OKX USDT 무기한 선물의 기술적 신호를 감지해 Telegram으로 알려
 | 감시 코인 | BTC, ETH, SOL, HYPE, DOGE, XRP, LIT, SUI, BNB (9개) |
 | 신호 종류 | RSI · MACD · Stochastic · Engulfing · EMA Cross · VWAP Cross · Supertrend · BB Squeeze · MFI · Parabolic SAR |
 | 1회 검사 | **166건** (코인 × 타임프레임 × 신호 조합) |
-| 실행 주기 | 15분마다 (외부 크론 → GitHub Actions) |
+| 실행 주기 | 매 15분 정각 (`00`, `15`, `30`, `45`분, 외부 크론 → GitHub Actions) |
 | 거래소 | OKX USDT 무기한 선물 (`COIN/USDT:USDT`) |
 
 ### 신호별 검사 범위
@@ -47,7 +47,7 @@ OKX USDT 무기한 선물의 기술적 신호를 감지해 Telegram으로 알려
 ### 2. 중복 알림 방지
 
 - 돌파가 발생한 캔들이 **방금 닫힌 직후 첫 실행**에서만 알림을 보냅니다 (`is_freshly_closed`).
-- 15분마다 스캔하므로 1h/4h 신호는 캔들 종료 후 첫 실행(약 정각+1분)에만 1회 발화합니다.
+- 매 15분 정각에 스캔하므로 1h/4h 신호는 캔들 종료 뒤 처음 시작된 실행에서만 1회 발화합니다. GitHub Actions 대기 시간으로 실제 시작 시각은 약간 늦어질 수 있습니다.
 
 | 타임프레임 | 발화 시점 |
 | --- | --- |
@@ -262,7 +262,58 @@ GitHub Actions Summary에는 총 검사·발생·오류 건수와 **10개 신호
 
 ---
 
-## 설정
+## Fork 후 설치·활용 가이드
+
+처음 사용하는 경우에도 아래 순서대로 설정하면 자신의 Telegram으로 알림을 받을 수 있습니다. 이 봇은 주문 권한이나 OKX API Key를 요구하지 않습니다.
+
+### 1. 저장소 Fork 및 Actions 활성화
+
+1. 이 페이지 오른쪽 위의 **Fork**를 눌러 자신의 GitHub 계정으로 복사합니다.
+2. Fork된 저장소의 **Actions** 탭에서 안내가 표시되면 **I understand my workflows, go ahead and enable them**을 선택합니다.
+3. 필요하면 [main.py](main.py)의 `WATCHLIST`와 각 코인 제한 목록을 자신의 전략에 맞게 수정하고 커밋합니다.
+
+### 2. Telegram Bot과 Chat ID 준비
+
+1. Telegram에서 `@BotFather`를 열고 `/newbot`으로 봇을 생성합니다.
+2. 발급받은 토큰을 복사합니다. 이것이 `TELEGRAM_BOT_TOKEN`입니다.
+3. 생성한 봇에게 Telegram에서 먼저 메시지(예: `/start`)를 보냅니다.
+4. 브라우저에서 `https://api.telegram.org/bot<토큰>/getUpdates`를 열고 응답의 `message.chat.id` 값을 확인합니다. 이것이 개인 채팅용 `TELEGRAM_CHAT_ID`입니다.
+
+그룹 알림은 봇을 그룹에 초대하고 메시지를 보낸 뒤 같은 방식으로 `chat.id`를 확인합니다. 그룹 ID는 보통 음수입니다.
+
+### 3. GitHub Secrets 등록
+
+Fork한 저장소에서 **Settings → Secrets and variables → Actions → New repository secret**으로 다음 값을 각각 등록합니다.
+
+| Secret | 값 |
+| --- | --- |
+| `TELEGRAM_BOT_TOKEN` | BotFather가 발급한 토큰 |
+| `TELEGRAM_CHAT_ID` | 알림을 받을 개인/그룹 Chat ID |
+
+Secrets는 워크플로우 로그에 표시되지 않습니다. 토큰을 README, 코드, 커밋 메시지에 직접 넣지 마세요.
+
+### 4. 15분 정각 스케줄 등록
+
+이 저장소는 `repository_dispatch`로 실행됩니다. [console.cron-job.org](https://console.cron-job.org/) 등 외부 스케줄러에 아래 요청을 등록합니다.
+
+| 항목 | 값 |
+| --- | --- |
+| Cron | `0,15,30,45 * * * *` |
+| Timezone | `Asia/Seoul` |
+| URL | `https://api.github.com/repos/<GITHUB_ID>/<FORK_REPOSITORY>/dispatches` |
+
+`<GITHUB_ID>`와 `<FORK_REPOSITORY>`는 반드시 본인의 GitHub 사용자명과 Fork한 저장소 이름으로 바꿉니다. 자세한 헤더·본문과 PAT 생성 방법은 아래 “외부 크론 트리거”를 그대로 사용하면 됩니다.
+
+### 5. 첫 실행 확인
+
+1. Fork 저장소의 **Actions** → `RSI Telegram Signal Bot`을 엽니다.
+2. **Run workflow**로 한 번 수동 실행합니다.
+3. 실행의 **Summary**에서 166건 검사와 오류 유무를 확인합니다.
+4. 다음 정각 스케줄 실행 후 Telegram 알림을 확인합니다. 조건에 맞는 신호가 없으면 알림이 없는 것이 정상입니다.
+
+---
+
+## 세부 설정 참고
 
 ### 1. Telegram Secrets
 
@@ -278,13 +329,13 @@ OKX API Key는 **필요 없습니다** (공개 데이터만 사용).
 ### 2. 외부 크론 트리거
 
 워크플로우는 `repository_dispatch` 이벤트로 실행됩니다.  
-[console.cron-job.org](https://console.cron-job.org/)에서 15분마다 POST 요청을 보냅니다.
+[console.cron-job.org](https://console.cron-job.org/)에서 매 15분 정각에 POST 요청을 보냅니다.
 
 | 항목 | 값 |
 | --- | --- |
-| Cron | `1,16,31,46 * * * *` |
+| Cron | `0,15,30,45 * * * *` |
 | Timezone | `Asia/Seoul` |
-| URL | `https://api.github.com/repos/zqvo04/RSI_signal/dispatches` |
+| URL | `https://api.github.com/repos/<GITHUB_ID>/<FORK_REPOSITORY>/dispatches` |
 
 **헤더**
 
@@ -306,7 +357,7 @@ Content-Type: application/json
 }
 ```
 
-Fine-grained PAT는 `RSI_signal` 저장소만 선택하고, `Contents: Read and write` 권한을 부여합니다.
+Fine-grained PAT는 **Fork한 본인 저장소만** 선택하고, `Contents: Read and write` 권한을 부여합니다. URL의 두 자리표시자는 본인의 GitHub 사용자명과 저장소 이름으로 교체해야 합니다.
 
 ### 3. 동작 확인
 
