@@ -59,15 +59,16 @@ OKX USDT 무기한 선물의 기술적 신호를 감지해 Telegram으로 알려
 
 신호 캔들(돌파가 발생한 최근 완료 캔들)의 거래량이 **직전 20개 완료 캔들 평균 × 배수** 이상이어야 합니다.
 
-| 신호 | 최소 배수 |
-| --- | ---: |
-| RSI · MACD · Stochastic | 1.1× |
-| EMA Cross | 1.2× |
-| VWAP Cross | 1.3× + 직전 3봉 평균 초과 |
-| Engulfing | 1.4× |
-| Supertrend · Parabolic SAR | 1.2× |
-| BB Squeeze Breakout | 1.3× |
-| MFI | 1.1× |
+| 세트 | 포함 신호 | 최소 배수 |
+| --- | --- | ---: |
+| CORE | RSI · MACD · Engulfing · EMA Cross · VWAP Cross | 0.9× · 0.9× · 1.2× · 1.0× · 1.0× |
+| SECONDARY | Stochastic · Supertrend · BB Squeeze Breakout · MFI · Parabolic SAR | 1.5× (공통) |
+
+### 4. SECONDARY 상위 TF 방향 필터
+
+- `HIGHER_TF_MAP = {15m: 1h, 1h: 4h}` 기준으로 SECONDARY는 상위 TF 방향과 동일할 때만 통과합니다.
+- 상위 TF 데이터 부족/중립/오류는 fail-closed로 차단합니다.
+- `4h` SECONDARY는 정책상 단독 신뢰로 간주해 상위 TF 필터를 적용하지 않습니다(우회 통과).
 
 ### 신뢰도 태그
 
@@ -163,7 +164,7 @@ TypicalPrice = (High + Low + Close) / 3
 | 📈 LONG | Close가 Supertrend를 아래→위 돌파하고 양봉 |
 | 📉 SHORT | Close가 Supertrend를 위→아래 돌파하고 음봉 |
 
-**추가 필터:** 돌파 강도 ≥ ATR(10) × 0.2 · 직전 3봉이 돌파 전 추세 방향 유지 · 거래량 1.2×
+**추가 필터:** 돌파 강도 ≥ ATR(10) × 0.2 · 직전 3봉이 돌파 전 추세 방향 유지 · SECONDARY 공통 거래량 1.5×
 
 ---
 
@@ -177,7 +178,7 @@ TypicalPrice = (High + Low + Close) / 3
 | 📉 SHORT | 직전 4봉이 Lower Band 이상이며, Close가 Lower Band를 하향 돌파하고 음봉 |
 
 **Squeeze 조건:** 최근 신호봉 직전 10봉 중 8봉 이상이 `BB Width ≤ ATR(14) × 1.5`여야 합니다.  
-**추가 필터:** 돌파 강도 ≥ ATR(14) × 0.15 · 거래량 1.3×
+**추가 필터:** 돌파 강도 ≥ ATR(14) × 0.15 · SECONDARY 공통 거래량 1.5×
 
 ---
 
@@ -190,7 +191,7 @@ Typical Price = `(High + Low + Close) / 3`, Raw Money Flow = `Typical Price × v
 | 📈 LONG | 이전 MFI < 20 → 최근 MFI ≥ 20, 최근 양봉 |
 | 📉 SHORT | 이전 MFI > 80 → 최근 MFI ≤ 80, 최근 음봉 |
 
-**추가 필터:** 임계값으로부터 MFI 2 이상 이탈 · 거래량 1.1×. `15m`은 BTC·ETH만 감시합니다.
+**추가 필터:** 임계값으로부터 MFI 2 이상 이탈 · SECONDARY 공통 거래량 1.5×. `15m`은 BTC·ETH만 감시합니다.
 
 ---
 
@@ -201,7 +202,7 @@ Typical Price = `(High + Low + Close) / 3`, Raw Money Flow = `Typical Price × v
 | 📈 LONG | Close가 PSAR을 아래→위 돌파하고 양봉 |
 | 📉 SHORT | Close가 PSAR을 위→아래 돌파하고 음봉 |
 
-**추가 필터:** 직전 3봉이 돌파 전 추세 방향 유지 · 돌파 강도 ≥ ATR(14) × 0.15 · 거래량 1.2×
+**추가 필터:** 직전 3봉이 돌파 전 추세 방향 유지 · 돌파 강도 ≥ ATR(14) × 0.15 · SECONDARY 공통 거래량 1.5×
 
 ---
 

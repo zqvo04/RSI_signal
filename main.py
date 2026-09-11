@@ -35,6 +35,8 @@ ENGULFING_TIMEFRAMES = ("1h", "4h")
 EMA_TIMEFRAMES = ("1h", "4h")
 VWAP_TIMEFRAMES = ("1h", "4h")
 VWAP_COINS = ("BTC", "ETH", "SOL", "BNB", "XRP")
+CORE_INDICATORS = ("RSI", "MACD", "Engulfing", "EMA Cross", "VWAP Cross")
+SECONDARY_INDICATORS = ("Stochastic", "Supertrend", "BB Squeeze Breakout", "MFI", "Parabolic SAR")
 TIMEFRAME_IMPORTANCE = {
     "4h": "🔥",
     "1h": "⚡️",
@@ -51,15 +53,19 @@ EMA_FAST = 8
 EMA_SLOW = 21
 EMA_TREND = 20
 ATR_LENGTH = 14
-VOLUME_AVG_LENGTH = 20
-VOLUME_MIN_RATIO = 1.1
-ENGULFING_VOLUME_RATIO = 1.4
-EMA_VOLUME_RATIO = 1.2
-VWAP_VOLUME_RATIO = 1.3
-SUPERTREND_VOLUME_RATIO = 1.2
-BB_SQUEEZE_VOLUME_RATIO = 1.3
-MFI_VOLUME_RATIO = 1.1
-PSAR_VOLUME_RATIO = 1.2
+SECONDARY_N = 20
+MULT = 1.5
+VOLUME_AVG_LENGTH = SECONDARY_N
+HIGHER_TF_MAP = {"15m": "1h", "1h": "4h"}
+CORE_VOLUME_RATIOS = {
+    "RSI": 0.9,
+    "MACD": 0.9,
+    "Engulfing": 1.2,
+    "EMA Cross": 1.0,
+    "VWAP Cross": 1.0,
+}
+HIGHER_CONFIRM_CACHE_SECONDS = 10
+_higher_tf_direction_cache: dict[tuple[str, str], tuple[float, Optional[str]]] = {}
 OHLCV_LIMIT = 100
 REQUEST_DELAY_SECONDS = 0.5
 CANDLE_CLOSE_GRACE_SECONDS = 30
@@ -221,7 +227,7 @@ def passes_volume_filter(
     frame: pd.DataFrame,
     timeframe: str,
     signal_candle: pd.Series,
-    min_ratio: float = VOLUME_MIN_RATIO,
+    min_ratio: float = 1.0,
 ) -> bool:
     """Return True when the signal candle volume is >= recent average * min_ratio."""
     completed = completed_candles(frame, timeframe)
@@ -238,6 +244,70 @@ def passes_volume_filter(
 
     signal_volume = float(signal_candle["volume"])
     return signal_volume >= avg_volume * min_ratio
+
+
+def _derive_higher_tf_side(frame: pd.DataFrame, higher_tf: str) -> Optional[str]:
+    completed = completed_candles(frame, higher_tf)
+    if completed.empty:
+        return None
+    current = completed.iloc[-1]
+    close = float(current["close"])
+    ema8 = float(current["ema8"])
+    ema21 = float(current["ema21"])
+    if close > ema21 and ema8 >= ema21:
+        return "LONG"
+    if close < ema21 and ema8 <= ema21:
+        return "SHORT"
+    return None
+
+
+def _fetch_higher_trend_frame(exchange: ccxt.okx, symbol: str, higher_tf: str) -> pd.DataFrame:
+    frame = fetch_confirmed_frame(exchange, symbol, higher_tf)
+    frame["ema8"] = ta.ema(frame["close"], length=EMA_FAST)
+    frame["ema21"] = ta.ema(frame["close"], length=EMA_SLOW)
+    return frame.dropna(subset=["ema8", "ema21"]).reset_index(drop=True)
+
+
+def _get_higher_tf_side(exchange: ccxt.okx, coin: str, symbol: str, higher_tf: str) -> Optional[str]:
+    cache_key = (coin, higher_tf)
+    now = time.time()
+    cached = _higher_tf_direction_cache.get(cache_key)
+    if cached and (now - cached[0]) < HIGHER_CONFIRM_CACHE_SECONDS:
+        return cached[1]
+    frame = _fetch_higher_trend_frame(exchange, symbol, higher_tf)
+    side = _derive_higher_tf_side(frame, higher_tf)
+    _higher_tf_direction_cache[cache_key] = (now, side)
+    return side
+
+
+def _confirm_higher(side: str, coin: str, timeframe: str, exchange: ccxt.okx, symbol: str) -> bool:
+    # ponytail: 4h secondary is trusted standalone and bypasses higher timeframe checks.
+    if timeframe == "4h":
+        logging.info("Higher-TF bypass for %s %s secondary signal (%s)", coin, side, timeframe)
+        return True
+    higher_tf = HIGHER_TF_MAP.get(timeframe)
+    if not higher_tf:
+        logging.warning("Higher-TF fail-closed for %s %s: no mapping for %s", coin, side, timeframe)
+        return False
+    try:
+        higher_side = _get_higher_tf_side(exchange, coin, symbol, higher_tf)
+    except (ccxt.BaseError, ValueError, RuntimeError, KeyError) as error:
+        logging.warning("Higher-TF fail-closed for %s %s (%s): %s", coin, side, timeframe, error)
+        return False
+    if higher_side is None:
+        logging.info("Higher-TF fail-closed for %s %s (%s): neutral/insufficient", coin, side, timeframe)
+        return False
+    if higher_side != side:
+        logging.info(
+            "Higher-TF mismatch for %s (%s): signal=%s higher(%s)=%s",
+            coin,
+            timeframe,
+            side,
+            higher_tf,
+            higher_side,
+        )
+        return False
+    return True
 
 
 def _candle_body(row: pd.Series) -> float:
@@ -491,32 +561,15 @@ def find_ema_signal(frame: pd.DataFrame, timeframe: str) -> Optional[tuple[str, 
     return None
 
 
-def _passes_vwap_volume_filter(completed: pd.DataFrame, current: pd.Series) -> bool:
-    """VWAP signals require both the 20-candle average gate and a 3-candle spike."""
-    if len(completed) < VOLUME_AVG_LENGTH + 1:
-        return False
-
-    prior_volumes = completed.iloc[-(VOLUME_AVG_LENGTH + 1):-1]["volume"]
-    avg_volume = float(prior_volumes.mean())
-    if avg_volume <= 0:
-        return False
-
-    recent_avg_volume = float(completed.iloc[-4:-1]["volume"].mean())
-    signal_volume = float(current["volume"])
-    return signal_volume >= avg_volume * VWAP_VOLUME_RATIO and signal_volume > recent_avg_volume
-
-
 def find_vwap_signal(frame: pd.DataFrame, timeframe: str) -> Optional[tuple[str, pd.Series, pd.Series]]:
     """Return a VWAP cross signal from the two latest completed candles."""
     completed = completed_candles(frame, timeframe)
-    if len(completed) < max(VWAP_WINDOW[timeframe], VOLUME_AVG_LENGTH + 1, 5):
+    if len(completed) < max(VWAP_WINDOW[timeframe], 5):
         return None
 
     previous = completed.iloc[-2]
     current = completed.iloc[-1]
     if not is_freshly_closed(current, timeframe):
-        return None
-    if not _passes_vwap_volume_filter(completed, current):
         return None
 
     prev_close = float(previous["close"])
@@ -887,6 +940,8 @@ def _process_signal_check(
     build_message,
     volume_ratio: float,
     use_volume_filter: bool = True,
+    require_higher_tf_confirmation: bool = False,
+    exchange: Optional[ccxt.okx] = None,
 ) -> bool:
     """Run one signal check and send Telegram alerts when filters pass."""
     signal = find_signal(frame, timeframe)
@@ -906,20 +961,35 @@ def _process_signal_check(
             VOLUME_AVG_LENGTH,
         )
         return False
+    if require_higher_tf_confirmation:
+        if exchange is None:
+            return False
+        if not _confirm_higher(side, coin, timeframe, exchange, symbol):
+            return False
 
     send_telegram_message(build_message(coin, timeframe, side, previous, current))
     logging.info("Sent %s %s signal for %s (%s)", label, side, symbol, timeframe)
     return True
 
 
-def _process_new_indicator_check(label: str, coin: str, timeframe: str, frame: pd.DataFrame, checker, volume_ratio: float) -> bool:
+def _process_new_indicator_check(
+    label: str,
+    coin: str,
+    symbol: str,
+    timeframe: str,
+    frame: pd.DataFrame,
+    checker,
+    exchange: ccxt.okx,
+) -> bool:
     """Run a new indicator checker returning (type, direction, details)."""
     signal = checker(frame, timeframe, coin)
     if not signal:
         return False
     _, side, details = signal
     current = details["current"]
-    if not passes_volume_filter(frame, timeframe, current, min_ratio=volume_ratio):
+    if not passes_volume_filter(frame, timeframe, current, min_ratio=MULT):
+        return False
+    if not _confirm_higher(side, coin, timeframe, exchange, symbol):
         return False
     send_telegram_message(format_indicator_message(label, coin, timeframe, side))
     logging.info("Sent %s %s signal for %s (%s)", label, side, coin, timeframe)
@@ -983,7 +1053,7 @@ def main() -> None:
                     frame,
                     find_rsi_signal,
                     format_rsi_message,
-                    VOLUME_MIN_RATIO,
+                    CORE_VOLUME_RATIOS["RSI"],
                 ):
                     signal_count += 1
                     signal_breakdown["RSI"]["signals"] += 1
@@ -1018,7 +1088,7 @@ def main() -> None:
                     frame,
                     find_macd_signal,
                     format_macd_message,
-                    VOLUME_MIN_RATIO,
+                    CORE_VOLUME_RATIOS["MACD"],
                 ):
                     signal_count += 1
                     signal_breakdown["MACD"]["signals"] += 1
@@ -1053,7 +1123,9 @@ def main() -> None:
                     frame,
                     find_stoch_signal,
                     format_stoch_message,
-                    VOLUME_MIN_RATIO,
+                    MULT,
+                    require_higher_tf_confirmation=True,
+                    exchange=exchange,
                 ):
                     signal_count += 1
                     signal_breakdown["Stochastic"]["signals"] += 1
@@ -1076,7 +1148,7 @@ def main() -> None:
                     frame,
                     find_engulfing_signal,
                     lambda coin, timeframe, side, previous, current: format_engulfing_message(coin, timeframe, side),
-                    ENGULFING_VOLUME_RATIO,
+                    CORE_VOLUME_RATIOS["Engulfing"],
                 ):
                     signal_count += 1
                     signal_breakdown["Engulfing"]["signals"] += 1
@@ -1099,7 +1171,7 @@ def main() -> None:
                     frame,
                     find_ema_signal,
                     lambda coin, timeframe, side, previous, current: format_ema_message(coin, timeframe, side),
-                    EMA_VOLUME_RATIO,
+                    CORE_VOLUME_RATIOS["EMA Cross"],
                 ):
                     signal_count += 1
                     signal_breakdown["EMA Cross"]["signals"] += 1
@@ -1123,8 +1195,7 @@ def main() -> None:
                         frame,
                         find_vwap_signal,
                         lambda coin, timeframe, side, previous, current: format_vwap_message(coin, timeframe, side),
-                        VWAP_VOLUME_RATIO,
-                        use_volume_filter=False,
+                        CORE_VOLUME_RATIOS["VWAP Cross"],
                     ):
                         signal_count += 1
                         signal_breakdown["VWAP Cross"]["signals"] += 1
@@ -1139,7 +1210,7 @@ def main() -> None:
             signal_breakdown["Supertrend"]["checked"] += 1
             try:
                 frame = fetch_supertrend_frame(exchange, symbol, timeframe)
-                if _process_new_indicator_check("Supertrend", coin, timeframe, frame, check_supertrend, SUPERTREND_VOLUME_RATIO):
+                if _process_new_indicator_check("Supertrend", coin, symbol, timeframe, frame, check_supertrend, exchange):
                     signal_count += 1
                     signal_breakdown["Supertrend"]["signals"] += 1
             except (ccxt.BaseError, requests.RequestException, ValueError, RuntimeError, KeyError) as error:
@@ -1153,7 +1224,7 @@ def main() -> None:
             signal_breakdown["BB Squeeze"]["checked"] += 1
             try:
                 frame = fetch_bb_squeeze_frame(exchange, symbol, timeframe)
-                if _process_new_indicator_check("BB Squeeze Breakout", coin, timeframe, frame, check_bb_squeeze, BB_SQUEEZE_VOLUME_RATIO):
+                if _process_new_indicator_check("BB Squeeze Breakout", coin, symbol, timeframe, frame, check_bb_squeeze, exchange):
                     signal_count += 1
                     signal_breakdown["BB Squeeze"]["signals"] += 1
             except (ccxt.BaseError, requests.RequestException, ValueError, RuntimeError, KeyError) as error:
@@ -1169,7 +1240,7 @@ def main() -> None:
             signal_breakdown["MFI"]["checked"] += 1
             try:
                 frame = fetch_mfi_frame(exchange, symbol, timeframe)
-                if _process_new_indicator_check("MFI", coin, timeframe, frame, check_mfi, MFI_VOLUME_RATIO):
+                if _process_new_indicator_check("MFI", coin, symbol, timeframe, frame, check_mfi, exchange):
                     signal_count += 1
                     signal_breakdown["MFI"]["signals"] += 1
             except (ccxt.BaseError, requests.RequestException, ValueError, RuntimeError, KeyError) as error:
@@ -1184,7 +1255,7 @@ def main() -> None:
                 signal_breakdown["Parabolic SAR"]["checked"] += 1
                 try:
                     frame = fetch_parabolic_sar_frame(exchange, symbol, timeframe)
-                    if _process_new_indicator_check("Parabolic SAR", coin, timeframe, frame, check_parabolic_sar, PSAR_VOLUME_RATIO):
+                    if _process_new_indicator_check("Parabolic SAR", coin, symbol, timeframe, frame, check_parabolic_sar, exchange):
                         signal_count += 1
                         signal_breakdown["Parabolic SAR"]["signals"] += 1
                 except (ccxt.BaseError, requests.RequestException, ValueError, RuntimeError, KeyError) as error:
