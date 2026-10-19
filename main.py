@@ -37,6 +37,7 @@ VWAP_TIMEFRAMES = ("1h", "4h")
 VWAP_COINS = ("BTC", "ETH", "SOL", "BNB", "XRP")
 CORE_INDICATORS = ("RSI", "MACD", "Engulfing", "EMA Cross", "VWAP Cross")
 SECONDARY_INDICATORS = ("Stochastic", "Supertrend", "BB Squeeze Breakout", "MFI", "Parabolic SAR")
+ENGULFING_LOW_TOLERANCE = 1.005
 TIMEFRAME_IMPORTANCE = {
     "4h": "🔥",
     "1h": "⚡️",
@@ -493,7 +494,7 @@ def find_engulfing_signal(frame: pd.DataFrame, timeframe: str) -> Optional[tuple
     if _basic_bullish_engulfing(previous, current, body_ratio):
         if _has_recent_same_direction_engulfing(completed, current_index, "LONG", timeframe):
             return None
-        if curr_low > float(prior_window["low"].min()):
+        if curr_low > float(prior_window["low"].min()) * ENGULFING_LOW_TOLERANCE:
             return None
         if curr_close <= float(current["ema20"]):
             return None
@@ -505,7 +506,7 @@ def find_engulfing_signal(frame: pd.DataFrame, timeframe: str) -> Optional[tuple
     if _basic_bearish_engulfing(previous, current, body_ratio):
         if _has_recent_same_direction_engulfing(completed, current_index, "SHORT", timeframe):
             return None
-        if curr_high < float(prior_window["high"].max()):
+        if curr_high < float(prior_window["high"].max()) / ENGULFING_LOW_TOLERANCE:
             return None
         if curr_close >= float(current["ema20"]):
             return None
@@ -588,7 +589,6 @@ def find_vwap_signal(frame: pd.DataFrame, timeframe: str) -> Optional[tuple[str,
         and all(float(completed.iloc[index]["close"]) < float(completed.iloc[index]["vwap"]) for index in (-5, -4, -3, -2))
         and curr_close > curr_open
         and candle_range > 0
-        and curr_close >= curr_low + candle_range * 0.6
     ):
         return "LONG", previous, current
 
@@ -599,7 +599,6 @@ def find_vwap_signal(frame: pd.DataFrame, timeframe: str) -> Optional[tuple[str,
         and all(float(completed.iloc[index]["close"]) > float(completed.iloc[index]["vwap"]) for index in (-5, -4, -3, -2))
         and curr_close < curr_open
         and candle_range > 0
-        and curr_close <= curr_high - candle_range * 0.6
     ):
         return "SHORT", previous, current
 
