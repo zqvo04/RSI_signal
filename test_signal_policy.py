@@ -56,15 +56,44 @@ class SignalPolicyTests(unittest.TestCase):
         def checker(_frame, _timeframe, _coin):
             return "MFI", "LONG", {"current": pd.Series({"timestamp": 1, "volume": 10})}
 
+        main._pending_signals.clear()
         with patch("main.passes_volume_filter", return_value=True) as volume_filter, patch(
             "main._confirm_higher", return_value=True
-        ) as confirm_higher, patch("main.send_telegram_message"):
+        ) as confirm_higher, patch("main.send_telegram_message") as send:
             sent = main._process_new_indicator_check(
                 "MFI", "BTC", "BTC/USDT:USDT", "1h", frame, checker, Mock()
             )
             assert sent is True
             assert volume_filter.call_args.kwargs["min_ratio"] == main.MULT
             confirm_higher.assert_called_once()
+            send.assert_not_called()
+            assert main._pending_signals == [("BTC", "LONG", "1h", "MFI")]
+        main._pending_signals.clear()
+
+    def test_digest_groups_by_coin_side_and_sorts_timeframes(self):
+        digest = main.format_signal_digest(
+            [
+                ("BTC", "LONG", "1h", "EMA Cross"),
+                ("BTC", "LONG", "4h", "RSI"),
+                ("BTC", "LONG", "4h", "MACD"),
+                ("SOL", "SHORT", "1h", "Engulfing"),
+            ]
+        )
+        assert digest.splitlines()[1:] == [
+            "📈 BTC LONG",
+            " 🔥 4h: RSI, MACD",
+            " ⚡️ 1h: EMA Cross",
+            "📉 SOL SHORT",
+            " ⚡️ 1h: Engulfing",
+        ]
+
+    def test_flush_sends_once_and_clears(self):
+        main._pending_signals[:] = [("BTC", "LONG", "1h", "RSI"), ("ETH", "LONG", "1h", "RSI")]
+        with patch("main.send_telegram_message") as send:
+            main.flush_signals()
+            main.flush_signals()
+        assert send.call_count == 1
+        assert main._pending_signals == []
 
 
 if __name__ == "__main__":
