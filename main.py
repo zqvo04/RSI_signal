@@ -846,6 +846,30 @@ def format_indicator_message(label: str, coin: str, timeframe: str, side: str) -
     return f"🚨 [{timeframe}] {label} 신호 발생{importance}\n- 코인: {coin}\n- 포지션: {position}"
 
 
+_pending_signals: list[tuple[str, str, str, str]] = []  # (coin, side, timeframe, label)
+
+
+def format_signal_digest(signals: list[tuple[str, str, str, str]]) -> str:
+    """Group signals by coin+side, timeframes highest first."""
+    grouped: dict[tuple[str, str], dict[str, list[str]]] = {}
+    for coin, side, timeframe, label in signals:
+        grouped.setdefault((coin, side), {}).setdefault(timeframe, []).append(label)
+    lines = [f"🚨 신호 요약 (UTC {pd.Timestamp.now(tz='UTC'):%H:%M})"]
+    for (coin, side), by_timeframe in grouped.items():
+        lines.append(f"{'📈' if side == 'LONG' else '📉'} {coin} {side}")
+        for timeframe in ("4h", "1h", "15m"):
+            if timeframe in by_timeframe:
+                lines.append(f" {TIMEFRAME_IMPORTANCE[timeframe]} {timeframe}: {', '.join(by_timeframe[timeframe])}")
+    return "\n".join(lines)
+
+
+def flush_signals() -> None:
+    """Send all signals queued during the scan as a single Telegram message."""
+    if _pending_signals:
+        send_telegram_message(format_signal_digest(_pending_signals))
+        _pending_signals.clear()
+
+
 def write_workflow_summary(
     checked_count: int,
     signal_count: int,
@@ -966,8 +990,8 @@ def _process_signal_check(
         if not _confirm_higher(side, coin, timeframe, exchange, symbol):
             return False
 
-    send_telegram_message(build_message(coin, timeframe, side, previous, current))
-    logging.info("Sent %s %s signal for %s (%s)", label, side, symbol, timeframe)
+    _pending_signals.append((coin, side, timeframe, label))
+    logging.info("Queued %s %s signal for %s (%s)", label, side, symbol, timeframe)
     return True
 
 
@@ -990,8 +1014,8 @@ def _process_new_indicator_check(
         return False
     if not _confirm_higher(side, coin, timeframe, exchange, symbol):
         return False
-    send_telegram_message(format_indicator_message(label, coin, timeframe, side))
-    logging.info("Sent %s %s signal for %s (%s)", label, side, coin, timeframe)
+    _pending_signals.append((coin, side, timeframe, label))
+    logging.info("Queued %s %s signal for %s (%s)", label, side, coin, timeframe)
     return True
 
 
@@ -1284,4 +1308,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        flush_signals()  # still deliver signals found before a mid-scan crash
