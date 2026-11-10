@@ -234,35 +234,24 @@ Typical Price = `(High + Low + Close) / 3`, Raw Money Flow = `Typical Price × v
 
 ## Telegram 알림 예시
 
-```
-🚨 [1h] RSI 신호 발생⚡️
-- 코인: BTC
-- 포지션: 📈 LONG
-```
+한 번의 스캔에서 발생한 신호는 **요약 메시지 1개**로 묶어 전송합니다. 신호가 없으면 메시지를 보내지 않습니다.
 
 ```
-🚨 [4h] Engulfing 신호 발생🔥
-- 코인: SOL
-- 포지션: 📈 LONG
+🚨 신호 요약 (UTC 01:56)
+📈 BTC LONG
+ 🔥 4h: EMA Cross, BB Squeeze Breakout
+ ⚡️ 1h: RSI
+📈 SOL LONG
+ 🔥 4h: Engulfing
+📈 ETH LONG
+ ⚡️ 1h: VWAP Cross
+📉 BTC SHORT
+ 👀 15m: RSI
 ```
 
-```
-🚨 [4h] EMA Cross 신호 발생🔥
-- 코인: BTC
-- 포지션: 📈 LONG
-```
-
-```
-🚨 [1h] VWAP Cross 신호 발생⚡️
-- 코인: ETH
-- 포지션: 📈 LONG
-```
-
-```
-🚨 [4h] BB Squeeze Breakout 신호 발생🔥
-- 코인: BTC
-- 포지션: 📈 LONG
-```
+- 묶는 기준: **코인 + 방향**별로 한 줄 헤더를 만들고, 그 아래 타임프레임을 `4h → 1h → 15m` 순으로 나열합니다.
+- 같은 타임프레임에서 여러 신호가 나오면 쉼표로 이어 씁니다.
+- 헤더의 시각은 UTC 기준 메시지 생성 시각입니다.
 
 ---
 
@@ -280,8 +269,10 @@ RSI (20) → MACD (18) → Stochastic (18)
 
 1. OKX에서 OHLCV 100개를 조회하고 지표를 계산합니다.
 2. 완성 캔들 2개로 신호를 판정합니다.
-3. 중복 방지 · 거래량 필터를 통과하면 Telegram으로 전송합니다.
+3. 중복 방지 · 거래량 필터를 통과한 신호는 대기열에 담습니다.
 4. 검사 사이 `0.5초` 지연으로 API 부하를 줄입니다.
+
+모든 검사가 끝나면 대기열의 신호를 **요약 메시지 1개**로 Telegram에 전송합니다. 실행 도중 오류로 중단되더라도, 그 시점까지 찾은 신호는 `finally`에서 함께 전송됩니다.
 
 개별 코인/타임프레임에서 오류가 나도 **나머지 검사는 계속** 진행됩니다.
 
