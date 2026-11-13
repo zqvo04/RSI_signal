@@ -31,10 +31,20 @@ class SignalPolicyTests(unittest.TestCase):
             assert main._confirm_higher("LONG", "BTC", "1h", Mock(), "BTC/USDT:USDT") is False
         assert main._confirm_higher("LONG", "BTC", "3m", Mock(), "BTC/USDT:USDT") is False
 
-    def test_confirm_higher_4h_bypass(self):
+    def test_confirm_higher_4h_1d_bypass(self):
         with patch("main._get_higher_tf_side") as mocked:
             assert main._confirm_higher("LONG", "BTC", "4h", Mock(), "BTC/USDT:USDT") is True
+            assert main._confirm_higher("LONG", "BTC", "1d", Mock(), "BTC/USDT:USDT") is True
             mocked.assert_not_called()
+
+    def test_1d_fires_only_in_first_scan_after_close(self):
+        day = main.TIMEFRAME_MILLISECONDS["1d"]
+        close_ms = 1_700_000_000_000
+        candle = pd.Series({"timestamp": close_ms - day})
+        with patch("main.time.time", return_value=(close_ms + 60_000) / 1000):
+            assert main.is_freshly_closed(candle, "1d") is True
+        with patch("main.time.time", return_value=(close_ms + main.SCAN_INTERVAL_SECONDS * 1000 + 1) / 1000):
+            assert main.is_freshly_closed(candle, "1d") is False
 
     def test_higher_tf_cache(self):
         frame = pd.DataFrame(

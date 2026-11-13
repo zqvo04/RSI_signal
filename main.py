@@ -25,20 +25,21 @@ WATCHLIST = [
     "BTC", "ETH", "SOL", "HYPE", "DOGE", "XRP",
     "LIT", "SUI", "BNB",
 ]
-TIMEFRAMES = ("15m", "1h", "4h")
+TIMEFRAMES = ("15m", "1h", "4h", "1d")
 RSI_15M_COINS = ("BTC", "ETH")
 MFI_15M_COINS = ("BTC", "ETH")
 PSAR_COINS = ("BTC", "ETH", "SOL", "BNB")
-MACD_TIMEFRAMES = ("1h", "4h")
-STOCH_TIMEFRAMES = ("1h", "4h")
-ENGULFING_TIMEFRAMES = ("1h", "4h")
-EMA_TIMEFRAMES = ("1h", "4h")
-VWAP_TIMEFRAMES = ("1h", "4h")
+MACD_TIMEFRAMES = ("1h", "4h", "1d")
+STOCH_TIMEFRAMES = ("1h", "4h", "1d")
+ENGULFING_TIMEFRAMES = ("1h", "4h", "1d")
+EMA_TIMEFRAMES = ("1h", "4h", "1d")
+VWAP_TIMEFRAMES = ("1h", "4h", "1d")
 VWAP_COINS = ("BTC", "ETH", "SOL", "BNB", "XRP")
 CORE_INDICATORS = ("RSI", "MACD", "Engulfing", "EMA Cross", "VWAP Cross")
 SECONDARY_INDICATORS = ("Stochastic", "Supertrend", "BB Squeeze Breakout", "MFI", "Parabolic SAR")
 ENGULFING_LOW_TOLERANCE = 1.005
 TIMEFRAME_IMPORTANCE = {
+    "1d": "🏆",
     "4h": "🔥",
     "1h": "⚡️",
     "15m": "👀",
@@ -75,13 +76,14 @@ TIMEFRAME_MILLISECONDS = {
     "15m": 15 * 60 * 1000,
     "1h": 60 * 60 * 1000,
     "4h": 4 * 60 * 60 * 1000,
+    "1d": 24 * 60 * 60 * 1000,  # OKX "1D" candle (UTC+8 open)
 }
-ENGULFING_BODY_RATIO = {"1h": 1.1, "4h": 1.0}
-ENGULFING_LOOKBACK = {"1h": 8, "4h": 5}
-VWAP_WINDOW = {"1h": 24, "4h": 6}
-VWAP_BREAKOUT_STRENGTH = {"1h": 1.003, "4h": 1.0015}
-VWAP_BREAKDOWN_STRENGTH = {"1h": 0.997, "4h": 0.9985}
-OKX_BAR = {"15m": "15m", "1h": "1H", "4h": "4H"}
+ENGULFING_BODY_RATIO = {"1h": 1.1, "4h": 1.0, "1d": 1.0}
+ENGULFING_LOOKBACK = {"1h": 8, "4h": 5, "1d": 5}
+VWAP_WINDOW = {"1h": 24, "4h": 6, "1d": 7}
+VWAP_BREAKOUT_STRENGTH = {"1h": 1.003, "4h": 1.0015, "1d": 1.0015}
+VWAP_BREAKDOWN_STRENGTH = {"1h": 0.997, "4h": 0.9985, "1d": 0.9985}
+OKX_BAR = {"15m": "15m", "1h": "1H", "4h": "4H", "1d": "1D"}
 
 
 def create_exchange() -> ccxt.okx:
@@ -282,8 +284,8 @@ def _get_higher_tf_side(exchange: ccxt.okx, coin: str, symbol: str, higher_tf: s
 
 
 def _confirm_higher(side: str, coin: str, timeframe: str, exchange: ccxt.okx, symbol: str) -> bool:
-    # ponytail: 4h secondary is trusted standalone and bypasses higher timeframe checks.
-    if timeframe == "4h":
+    # ponytail: 4h/1d secondary is trusted standalone and bypasses higher timeframe checks.
+    if timeframe in ("4h", "1d"):
         logging.info("Higher-TF bypass for %s %s secondary signal (%s)", coin, side, timeframe)
         return True
     higher_tf = HIGHER_TF_MAP.get(timeframe)
@@ -857,7 +859,7 @@ def format_signal_digest(signals: list[tuple[str, str, str, str]]) -> str:
     lines = [f"🚨 신호 요약 (UTC {pd.Timestamp.now(tz='UTC'):%H:%M})"]
     for (coin, side), by_timeframe in grouped.items():
         lines.append(f"{'📈' if side == 'LONG' else '📉'} {coin} {side}")
-        for timeframe in ("4h", "1h", "15m"):
+        for timeframe in ("1d", "4h", "1h", "15m"):
             if timeframe in by_timeframe:
                 lines.append(f" {TIMEFRAME_IMPORTANCE[timeframe]} {timeframe}: {', '.join(by_timeframe[timeframe])}")
     return "\n".join(lines)
@@ -1228,7 +1230,7 @@ def main() -> None:
                 finally:
                     time.sleep(REQUEST_DELAY_SECONDS)
 
-        for timeframe in ("1h", "4h"):
+        for timeframe in ("1h", "4h", "1d"):
             checked_count += 1
             signal_breakdown["Supertrend"]["checked"] += 1
             try:
@@ -1242,7 +1244,7 @@ def main() -> None:
             finally:
                 time.sleep(REQUEST_DELAY_SECONDS)
 
-        for timeframe in ("1h", "4h"):
+        for timeframe in ("1h", "4h", "1d"):
             checked_count += 1
             signal_breakdown["BB Squeeze"]["checked"] += 1
             try:
@@ -1273,7 +1275,7 @@ def main() -> None:
                 time.sleep(REQUEST_DELAY_SECONDS)
 
         if coin in PSAR_COINS:
-            for timeframe in ("1h", "4h"):
+            for timeframe in ("1h", "4h", "1d"):
                 checked_count += 1
                 signal_breakdown["Parabolic SAR"]["checked"] += 1
                 try:
