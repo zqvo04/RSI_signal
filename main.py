@@ -76,14 +76,14 @@ TIMEFRAME_MILLISECONDS = {
     "15m": 15 * 60 * 1000,
     "1h": 60 * 60 * 1000,
     "4h": 4 * 60 * 60 * 1000,
-    "1d": 24 * 60 * 60 * 1000,  # OKX "1D" candle (UTC+8 open)
+    "1d": 24 * 60 * 60 * 1000,  # UTC 00:00 close (ccxt okx appends "utc" for >=6h bars)
 }
 ENGULFING_BODY_RATIO = {"1h": 1.1, "4h": 1.0, "1d": 1.0}
 ENGULFING_LOOKBACK = {"1h": 8, "4h": 5, "1d": 5}
 VWAP_WINDOW = {"1h": 24, "4h": 6, "1d": 7}
 VWAP_BREAKOUT_STRENGTH = {"1h": 1.003, "4h": 1.0015, "1d": 1.0015}
 VWAP_BREAKDOWN_STRENGTH = {"1h": 0.997, "4h": 0.9985, "1d": 0.9985}
-OKX_BAR = {"15m": "15m", "1h": "1H", "4h": "4H", "1d": "1D"}
+OKX_BAR = {"15m": "15m", "1h": "1H", "4h": "4H", "1d": "1Dutc"}
 
 
 def create_exchange() -> ccxt.okx:
