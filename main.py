@@ -25,9 +25,7 @@ WATCHLIST = [
     "BTC", "ETH", "SOL", "HYPE", "DOGE", "XRP",
     "LIT", "SUI", "BNB",
 ]
-TIMEFRAMES = ("15m", "1h", "4h", "1d")
-RSI_15M_COINS = ("BTC", "ETH")
-MFI_15M_COINS = ("BTC", "ETH")
+TIMEFRAMES = ("1h", "4h", "1d")
 PSAR_COINS = ("BTC", "ETH", "SOL", "BNB")
 MACD_TIMEFRAMES = ("1h", "4h", "1d")
 STOCH_TIMEFRAMES = ("1h", "4h", "1d")
@@ -42,7 +40,6 @@ TIMEFRAME_IMPORTANCE = {
     "1d": "🏆",
     "4h": "🔥",
     "1h": "⚡️",
-    "15m": "👀",
 }
 RSI_LENGTH = 14
 MACD_FAST = 12
@@ -58,7 +55,7 @@ ATR_LENGTH = 14
 SECONDARY_N = 20
 MULT = 1.5
 VOLUME_AVG_LENGTH = SECONDARY_N
-HIGHER_TF_MAP = {"15m": "1h", "1h": "4h"}
+HIGHER_TF_MAP = {"1h": "4h"}
 CORE_VOLUME_RATIOS = {
     "RSI": 0.9,
     "MACD": 0.9,
@@ -73,7 +70,6 @@ REQUEST_DELAY_SECONDS = 0.5
 CANDLE_CLOSE_GRACE_SECONDS = 30
 SCAN_INTERVAL_SECONDS = 15 * 60
 TIMEFRAME_MILLISECONDS = {
-    "15m": 15 * 60 * 1000,
     "1h": 60 * 60 * 1000,
     "4h": 4 * 60 * 60 * 1000,
     "1d": 24 * 60 * 60 * 1000,  # UTC 00:00 close (ccxt okx appends "utc" for >=6h bars)
@@ -83,7 +79,7 @@ ENGULFING_LOOKBACK = {"1h": 8, "4h": 5, "1d": 5}
 VWAP_WINDOW = {"1h": 24, "4h": 6, "1d": 7}
 VWAP_BREAKOUT_STRENGTH = {"1h": 1.003, "4h": 1.0015, "1d": 1.0015}
 VWAP_BREAKDOWN_STRENGTH = {"1h": 0.997, "4h": 0.9985, "1d": 0.9985}
-OKX_BAR = {"15m": "15m", "1h": "1H", "4h": "4H", "1d": "1Dutc"}
+OKX_BAR = {"1h": "1H", "4h": "4H", "1d": "1Dutc"}
 
 
 def create_exchange() -> ccxt.okx:
@@ -859,7 +855,7 @@ def format_signal_digest(signals: list[tuple[str, str, str, str]]) -> str:
     lines = [f"🚨 신호 요약 (UTC {pd.Timestamp.now(tz='UTC'):%H:%M})"]
     for (coin, side), by_timeframe in grouped.items():
         lines.append(f"{'📈' if side == 'LONG' else '📉'} {coin} {side}")
-        for timeframe in ("1d", "4h", "1h", "15m"):
+        for timeframe in ("1d", "4h", "1h"):
             if timeframe in by_timeframe:
                 lines.append(f" {TIMEFRAME_IMPORTANCE[timeframe]} {timeframe}: {', '.join(by_timeframe[timeframe])}")
     return "\n".join(lines)
@@ -1054,8 +1050,6 @@ def main() -> None:
             continue
 
         for timeframe in TIMEFRAMES:
-            if timeframe == "15m" and coin not in RSI_15M_COINS:
-                continue
             checked_count += 1
             signal_breakdown["RSI"]["checked"] += 1
             try:
@@ -1259,8 +1253,6 @@ def main() -> None:
                 time.sleep(REQUEST_DELAY_SECONDS)
 
         for timeframe in TIMEFRAMES:
-            if timeframe == "15m" and coin not in MFI_15M_COINS:
-                continue
             checked_count += 1
             signal_breakdown["MFI"]["checked"] += 1
             try:

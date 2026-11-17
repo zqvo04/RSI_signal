@@ -10,7 +10,7 @@ class SignalPolicyTests(unittest.TestCase):
     def test_core_secondary_volume_constants(self):
         assert main.SECONDARY_N == 20
         assert main.MULT == 1.5
-        assert main.HIGHER_TF_MAP == {"15m": "1h", "1h": "4h"}
+        assert main.HIGHER_TF_MAP == {"1h": "4h"}
         assert main.CORE_VOLUME_RATIOS == {
             "RSI": 0.9,
             "MACD": 0.9,
@@ -21,8 +21,8 @@ class SignalPolicyTests(unittest.TestCase):
 
     def test_confirm_higher_match_and_mismatch(self):
         with patch("main._get_higher_tf_side", return_value="LONG"):
-            assert main._confirm_higher("LONG", "BTC", "15m", Mock(), "BTC/USDT:USDT") is True
-            assert main._confirm_higher("SHORT", "BTC", "15m", Mock(), "BTC/USDT:USDT") is False
+            assert main._confirm_higher("LONG", "BTC", "1h", Mock(), "BTC/USDT:USDT") is True
+            assert main._confirm_higher("SHORT", "BTC", "1h", Mock(), "BTC/USDT:USDT") is False
 
     def test_confirm_higher_fail_closed_cases(self):
         with patch("main._get_higher_tf_side", return_value=None):

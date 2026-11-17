@@ -19,7 +19,7 @@ OKX USDT 무기한 선물의 기술적 신호를 감지해 Telegram으로 알려
 
 | 신호 | 타임프레임 | 대상 코인 | 검사 건수 |
 | --- | --- | --- | ---: |
-| RSI(14) | 15m, 1h, 4h | 9코인 (15m는 BTC·ETH만) | 20 |
+| RSI(14) | 1h, 4h | 9코인 | 18 |
 | MACD(12,26,9) | 1h, 4h | 9코인 | 18 |
 | Stochastic(KDJ 14,3,3) | 1h, 4h | 9코인 | 18 |
 | Engulfing | 1h, 4h | 9코인 | 18 |
@@ -27,10 +27,10 @@ OKX USDT 무기한 선물의 기술적 신호를 감지해 Telegram으로 알려
 | VWAP Cross | 1h, 4h | BTC, ETH, SOL, BNB, XRP | 10 |
 | Supertrend (ATR 10, 3.0) | 1h, 4h | 9코인 | 18 |
 | BB Squeeze Breakout | 1h, 4h | 9코인 | 18 |
-| MFI(14) | 15m, 1h, 4h | 9코인 (15m는 BTC·ETH만) | 20 |
+| MFI(14) | 1h, 4h | 9코인 | 18 |
 | Parabolic SAR | 1h, 4h | BTC, ETH, SOL, BNB | 8 |
 
-감시 대상은 [main.py](main.py) 상단의 `WATCHLIST`, `RSI_15M_COINS`, `MFI_15M_COINS`, `VWAP_COINS`, `PSAR_COINS`에서 수정할 수 있습니다.
+감시 대상은 [main.py](main.py) 상단의 `WATCHLIST`, `VWAP_COINS`, `PSAR_COINS`에서 수정할 수 있습니다.
 
 ---
 
@@ -51,7 +51,6 @@ OKX USDT 무기한 선물의 기술적 신호를 감지해 Telegram으로 알려
 
 | 타임프레임 | 발화 시점 |
 | --- | --- |
-| 15m (RSI, BTC·ETH) | 15분 완성봉마다 |
 | 1h | 완성봉 종료 후 첫 실행 → 이후 3회 건너뜀 |
 | 4h | 완성봉 종료 후 첫 실행 → 이후 15회 건너뜀 |
 | 1d | OKX 일봉(`1Dutc`, UTC 00:00 = KST 09:00 마감) 종료 후 첫 실행 → 이후 95회 건너뜀 |
@@ -74,8 +73,7 @@ OKX USDT 무기한 선물의 기술적 신호를 감지해 Telegram으로 알려
 ### 4. SECONDARY 상위 TF 방향 필터
 
 - 적용 대상: **SECONDARY 신호만** 적용
-- 매핑 기준: `HIGHER_TF_MAP = {15m: 1h, 1h: 4h}`
-  - 15m SECONDARY 신호 → 1h 방향과 일치해야 통과
+- 매핑 기준: `HIGHER_TF_MAP = {1h: 4h}`
   - 1h SECONDARY 신호 → 4h 방향과 일치해야 통과
 - `4h`·`1d` SECONDARY는 정책상 단독 신뢰로 간주하여 상위 TF 필터를 적용하지 않습니다(우회 통과).
 
@@ -102,7 +100,6 @@ OKX USDT 무기한 선물의 기술적 신호를 감지해 Telegram으로 알려
 - `1d` → 🏆 최고 신뢰도
 - `4h` → 🔥 높은 신뢰도
 - `1h` → ⚡️ 중간 신뢰도
-- `15m` → 👀 단기 진입 타점 (RSI, BTC·ETH만)
 
 ---
 
@@ -114,8 +111,6 @@ OKX USDT 무기한 선물의 기술적 신호를 감지해 Telegram으로 알려
 | --- | --- |
 | 📈 LONG | 이전 완료 캔들 RSI < 30 → 최근 완료 캔들 RSI ≥ 30 |
 | 📉 SHORT | 이전 완료 캔들 RSI > 70 → 최근 완료 캔들 RSI ≤ 70 |
-
-`15m` RSI는 **BTC, ETH만** 감시합니다.
 
 ---
 
@@ -219,7 +214,7 @@ Typical Price = `(High + Low + Close) / 3`, Raw Money Flow = `Typical Price × v
 | 📈 LONG | 이전 MFI < 20 → 최근 MFI ≥ 20, 최근 양봉 |
 | 📉 SHORT | 이전 MFI > 80 → 최근 MFI ≤ 80, 최근 음봉 |
 
-**추가 필터:** 임계값으로부터 MFI 2 이상 이탈 · SECONDARY 공통 거래량 1.5×. `15m`은 BTC·ETH만 감시합니다.
+**추가 필터:** 임계값으로부터 MFI 2 이상 이탈 · SECONDARY 공통 거래량 1.5×.
 
 ---
 
@@ -248,10 +243,10 @@ Typical Price = `(High + Low + Close) / 3`, Raw Money Flow = `Typical Price × v
 📈 ETH LONG
  ⚡️ 1h: VWAP Cross
 📉 BTC SHORT
- 👀 15m: RSI
+ ⚡️ 1h: RSI
 ```
 
-- 묶는 기준: **코인 + 방향**별로 한 줄 헤더를 만들고, 그 아래 타임프레임을 `4h → 1h → 15m` 순으로 나열합니다.
+- 묶는 기준: **코인 + 방향**별로 한 줄 헤더를 만들고, 그 아래 타임프레임을 `4h → 1h` 순으로 나열합니다.
 - 같은 타임프레임에서 여러 신호가 나오면 쉼표로 이어 씁니다.
 - 헤더의 시각은 UTC 기준 메시지 생성 시각입니다.
 
