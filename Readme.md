@@ -19,16 +19,16 @@ OKX USDT 무기한 선물의 기술적 신호를 감지해 Telegram으로 알려
 
 | 신호 | 타임프레임 | 대상 코인 | 검사 건수 |
 | --- | --- | --- | ---: |
-| RSI(14) | 1h, 4h | 9코인 | 18 |
-| MACD(12,26,9) | 1h, 4h | 9코인 | 18 |
-| Stochastic(KDJ 14,3,3) | 1h, 4h | 9코인 | 18 |
-| Engulfing | 1h, 4h | 9코인 | 18 |
-| EMA Cross(8/21) | 1h, 4h | 9코인 | 18 |
-| VWAP Cross | 1h, 4h | BTC, ETH, SOL, BNB, XRP | 10 |
-| Supertrend (ATR 10, 3.0) | 1h, 4h | 9코인 | 18 |
-| BB Squeeze Breakout | 1h, 4h | 9코인 | 18 |
-| MFI(14) | 1h, 4h | 9코인 | 18 |
-| Parabolic SAR | 1h, 4h | BTC, ETH, SOL, BNB | 8 |
+| RSI(14) | 1h, 4h, 1d | 9코인 | 27 |
+| MACD(12,26,9) | 1h, 4h, 1d | 9코인 | 27 |
+| Stochastic(KDJ 14,3,3) | 1h, 4h, 1d | 9코인 | 27 |
+| Engulfing | 1h, 4h, 1d | 9코인 | 27 |
+| EMA Cross(8/21) | 1h, 4h, 1d | 9코인 | 27 |
+| VWAP Cross | 1h, 4h, 1d | BTC, ETH, SOL, BNB, XRP | 15 |
+| Supertrend (ATR 10, 3.0) | 1h, 4h, 1d | 9코인 | 27 |
+| BB Squeeze Breakout | 1h, 4h, 1d | 9코인 | 27 |
+| MFI(14) | 1h, 4h, 1d | 9코인 | 27 |
+| Parabolic SAR | 1h, 4h, 1d | BTC, ETH, SOL, BNB | 12 |
 
 감시 대상은 [main.py](main.py) 상단의 `WATCHLIST`, `VWAP_COINS`, `PSAR_COINS`에서 수정할 수 있습니다.
 
