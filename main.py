@@ -26,7 +26,6 @@ WATCHLIST = [
     "LIT", "SUI", "BNB",
 ]
 TIMEFRAMES = ("1h", "4h", "1d")
-PSAR_COINS = ("BTC", "ETH", "SOL", "BNB")
 MACD_TIMEFRAMES = ("1h", "4h", "1d")
 STOCH_TIMEFRAMES = ("1h", "4h", "1d")
 ENGULFING_TIMEFRAMES = ("1h", "4h", "1d")
@@ -34,7 +33,7 @@ EMA_TIMEFRAMES = ("1h", "4h", "1d")
 VWAP_TIMEFRAMES = ("1h", "4h", "1d")
 VWAP_COINS = ("BTC", "ETH", "SOL", "BNB", "XRP")
 CORE_INDICATORS = ("RSI", "MACD", "Engulfing", "EMA Cross", "VWAP Cross")
-SECONDARY_INDICATORS = ("Stochastic", "Supertrend", "BB Squeeze Breakout", "MFI", "Parabolic SAR")
+SECONDARY_INDICATORS = ("Stochastic", "Supertrend", "BB Squeeze Breakout")
 ENGULFING_LOW_TOLERANCE = 1.005
 TIMEFRAME_IMPORTANCE = {
     "1d": "🏆",
@@ -642,51 +641,6 @@ def fetch_bb_squeeze_frame(exchange: ccxt.okx, symbol: str, timeframe: str) -> p
     return frame.dropna(subset=["bb_upper", "bb_lower", "bb_width", "atr14"]).reset_index(drop=True)
 
 
-def fetch_mfi_frame(exchange: ccxt.okx, symbol: str, timeframe: str) -> pd.DataFrame:
-    frame = fetch_confirmed_frame(exchange, symbol, timeframe)
-    typical = (frame["high"] + frame["low"] + frame["close"]) / 3
-    flow = typical * frame["volume"]
-    positive = flow.where(typical > typical.shift(1), 0.0)
-    negative = flow.where(typical < typical.shift(1), 0.0)
-    positive_sum = positive.rolling(14).sum()
-    negative_sum = negative.rolling(14).sum()
-    frame["mfi"] = 100 - (100 / (1 + positive_sum / negative_sum))
-    frame.loc[negative_sum == 0, "mfi"] = 100.0
-    return frame.dropna(subset=["mfi"]).reset_index(drop=True)
-
-
-def fetch_parabolic_sar_frame(exchange: ccxt.okx, symbol: str, timeframe: str) -> pd.DataFrame:
-    frame = fetch_confirmed_frame(exchange, symbol, timeframe)
-    if len(frame) < 2:
-        return frame
-    sar = pd.Series(index=frame.index, dtype=float)
-    uptrend = bool(frame.at[1, "close"] >= frame.at[0, "close"])
-    sar.iloc[0] = float(frame.at[0, "low"] if uptrend else frame.at[0, "high"])
-    ep = float(frame.at[0, "high"] if uptrend else frame.at[0, "low"])
-    af = 0.02
-    for index in range(1, len(frame)):
-        candidate = float(sar.iloc[index - 1]) + af * (ep - float(sar.iloc[index - 1]))
-        if uptrend:
-            candidate = min(candidate, float(frame.iloc[index - 1]["low"]), float(frame.iloc[max(0, index - 2)]["low"]))
-            if float(frame.iloc[index]["low"]) < candidate:
-                uptrend, sar.iloc[index], ep, af = False, ep, float(frame.iloc[index]["low"]), 0.02
-            else:
-                sar.iloc[index] = candidate
-                if float(frame.iloc[index]["high"]) > ep:
-                    ep, af = float(frame.iloc[index]["high"]), min(af + 0.02, 0.2)
-        else:
-            candidate = max(candidate, float(frame.iloc[index - 1]["high"]), float(frame.iloc[max(0, index - 2)]["high"]))
-            if float(frame.iloc[index]["high"]) > candidate:
-                uptrend, sar.iloc[index], ep, af = True, ep, float(frame.iloc[index]["high"]), 0.02
-            else:
-                sar.iloc[index] = candidate
-                if float(frame.iloc[index]["low"]) < ep:
-                    ep, af = float(frame.iloc[index]["low"]), min(af + 0.02, 0.2)
-    frame["psar"] = sar
-    frame["atr14"] = ta.atr(frame["high"], frame["low"], frame["close"], length=14)
-    return frame.dropna(subset=["psar", "atr14"]).reset_index(drop=True)
-
-
 def _new_indicator_pair(frame: pd.DataFrame, timeframe: str, minimum: int) -> Optional[tuple[pd.DataFrame, pd.Series, pd.Series]]:
     completed = completed_candles(frame, timeframe)
     if len(completed) < minimum:
@@ -726,33 +680,6 @@ def check_bb_squeeze(df: pd.DataFrame, timeframe: str, coin: str):
         return "BB Squeeze", "LONG", {"previous": previous, "current": current}
     if all(prior_four["close"] >= prior_four["bb_lower"]) and close < float(current["bb_lower"]) and close < open_ and float(current["bb_lower"]) - close >= float(current["atr14"]) * .15:
         return "BB Squeeze", "SHORT", {"previous": previous, "current": current}
-    return None
-
-
-def check_mfi(df: pd.DataFrame, timeframe: str, coin: str):
-    pair = _new_indicator_pair(df, timeframe, 21)
-    if not pair:
-        return None
-    _, previous, current = pair
-    mfi, prev_mfi = float(current["mfi"]), float(previous["mfi"])
-    if prev_mfi < 20 <= mfi and mfi - 20 >= 2 and float(current["close"]) > float(current["open"]):
-        return "MFI", "LONG", {"previous": previous, "current": current}
-    if prev_mfi > 80 >= mfi and 80 - mfi >= 2 and float(current["close"]) < float(current["open"]):
-        return "MFI", "SHORT", {"previous": previous, "current": current}
-    return None
-
-
-def check_parabolic_sar(df: pd.DataFrame, timeframe: str, coin: str):
-    pair = _new_indicator_pair(df, timeframe, 21)
-    if not pair:
-        return None
-    completed, previous, current = pair
-    prior_three = completed.iloc[-4:-1]
-    psar, close, open_ = float(current["psar"]), float(current["close"]), float(current["open"])
-    if float(previous["close"]) < float(previous["psar"]) and close > psar and close > open_ and close - psar >= float(current["atr14"]) * .15 and all(prior_three["close"] < prior_three["psar"]):
-        return "Parabolic SAR", "LONG", {"previous": previous, "current": current}
-    if float(previous["close"]) > float(previous["psar"]) and close < psar and close < open_ and psar - close >= float(current["atr14"]) * .15 and all(prior_three["close"] > prior_three["psar"]):
-        return "Parabolic SAR", "SHORT", {"previous": previous, "current": current}
     return None
 
 
@@ -1036,8 +963,6 @@ def main() -> None:
         "VWAP Cross": {"checked": 0, "signals": 0},
         "Supertrend": {"checked": 0, "signals": 0},
         "BB Squeeze": {"checked": 0, "signals": 0},
-        "MFI": {"checked": 0, "signals": 0},
-        "Parabolic SAR": {"checked": 0, "signals": 0},
     }
     btc_rsi_samples: list[tuple[str, pd.Series, pd.Series]] = []
     btc_macd_samples: list[tuple[str, pd.Series, pd.Series]] = []
@@ -1251,35 +1176,6 @@ def main() -> None:
                 logging.exception("Failed to check BB Squeeze %s (%s): %s", symbol, timeframe, error)
             finally:
                 time.sleep(REQUEST_DELAY_SECONDS)
-
-        for timeframe in TIMEFRAMES:
-            checked_count += 1
-            signal_breakdown["MFI"]["checked"] += 1
-            try:
-                frame = fetch_mfi_frame(exchange, symbol, timeframe)
-                if _process_new_indicator_check("MFI", coin, symbol, timeframe, frame, check_mfi, exchange):
-                    signal_count += 1
-                    signal_breakdown["MFI"]["signals"] += 1
-            except (ccxt.BaseError, requests.RequestException, ValueError, RuntimeError, KeyError) as error:
-                error_count += 1
-                logging.exception("Failed to check MFI %s (%s): %s", symbol, timeframe, error)
-            finally:
-                time.sleep(REQUEST_DELAY_SECONDS)
-
-        if coin in PSAR_COINS:
-            for timeframe in ("1h", "4h", "1d"):
-                checked_count += 1
-                signal_breakdown["Parabolic SAR"]["checked"] += 1
-                try:
-                    frame = fetch_parabolic_sar_frame(exchange, symbol, timeframe)
-                    if _process_new_indicator_check("Parabolic SAR", coin, symbol, timeframe, frame, check_parabolic_sar, exchange):
-                        signal_count += 1
-                        signal_breakdown["Parabolic SAR"]["signals"] += 1
-                except (ccxt.BaseError, requests.RequestException, ValueError, RuntimeError, KeyError) as error:
-                    error_count += 1
-                    logging.exception("Failed to check Parabolic SAR %s (%s): %s", symbol, timeframe, error)
-                finally:
-                    time.sleep(REQUEST_DELAY_SECONDS)
 
     logging.info(
         "Signal scan finished: %d checks, %d alerts sent, %d errors",

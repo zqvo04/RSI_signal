@@ -10,8 +10,8 @@ OKX USDT 무기한 선물의 기술적 신호를 감지해 Telegram으로 알려
 | 항목 | 내용 |
 | --- | --- |
 | 감시 코인 | BTC, ETH, SOL, HYPE, DOGE, XRP, LIT, SUI, BNB (9개) |
-| 신호 종류 | RSI · MACD · Stochastic · Engulfing · EMA Cross · VWAP Cross · Supertrend · BB Squeeze · MFI · Parabolic SAR |
-| 1회 검사 | **166건** (코인 × 타임프레임 × 신호 조합) |
+| 신호 종류 | RSI · MACD · Stochastic · Engulfing · EMA Cross · VWAP Cross · Supertrend · BB Squeeze |
+| 1회 검사 | **204건** (코인 × 타임프레임 × 신호 조합) |
 | 실행 주기 | 매 15분 정각 (`00`, `15`, `30`, `45`분, 외부 크론 → GitHub Actions) |
 | 거래소 | OKX USDT 무기한 선물 (`COIN/USDT:USDT`) |
 
@@ -27,10 +27,8 @@ OKX USDT 무기한 선물의 기술적 신호를 감지해 Telegram으로 알려
 | VWAP Cross | 1h, 4h, 1d | BTC, ETH, SOL, BNB, XRP | 15 |
 | Supertrend (ATR 10, 3.0) | 1h, 4h, 1d | 9코인 | 27 |
 | BB Squeeze Breakout | 1h, 4h, 1d | 9코인 | 27 |
-| MFI(14) | 1h, 4h, 1d | 9코인 | 27 |
-| Parabolic SAR | 1h, 4h, 1d | BTC, ETH, SOL, BNB | 12 |
 
-감시 대상은 [main.py](main.py) 상단의 `WATCHLIST`, `VWAP_COINS`, `PSAR_COINS`에서 수정할 수 있습니다.
+감시 대상은 [main.py](main.py) 상단의 `WATCHLIST`, `VWAP_COINS`에서 수정할 수 있습니다.
 
 ---
 
@@ -68,7 +66,7 @@ OKX USDT 무기한 선물의 기술적 신호를 감지해 Telegram으로 알려
 | 세트 | 포함 신호 | 최소 배수 |
 | --- | --- | ---: |
 | CORE | RSI · MACD · Engulfing · EMA Cross · VWAP Cross | 0.9× · 0.9× · 1.2× · 1.0× · 1.0× |
-| SECONDARY | Stochastic · Supertrend · BB Squeeze Breakout · MFI · Parabolic SAR | 1.5× (공통) |
+| SECONDARY | Stochastic · Supertrend · BB Squeeze Breakout | 1.5× (공통) |
 
 ### 4. SECONDARY 상위 TF 방향 필터
 
@@ -205,61 +203,14 @@ TypicalPrice = (High + Low + Close) / 3
 
 ---
 
-### MFI (Money Flow Index, 14)
-
-Typical Price = `(High + Low + Close) / 3`, Raw Money Flow = `Typical Price × vol` (OKX base currency 거래량)입니다.
-
-| 방향 | 조건 |
-| --- | --- |
-| 📈 LONG | 이전 MFI < 20 → 최근 MFI ≥ 20, 최근 양봉 |
-| 📉 SHORT | 이전 MFI > 80 → 최근 MFI ≤ 80, 최근 음봉 |
-
-**추가 필터:** 임계값으로부터 MFI 2 이상 이탈 · SECONDARY 공통 거래량 1.5×.
-
----
-
-### Parabolic SAR (AF 0.02, 최대 0.2)
-
-| 방향 | 핵심 조건 |
-| --- | --- |
-| 📈 LONG | Close가 PSAR을 아래→위 돌파하고 양봉 |
-| 📉 SHORT | Close가 PSAR을 위→아래 돌파하고 음봉 |
-
-**추가 필터:** 직전 3봉이 돌파 전 추세 방향 유지 · 돌파 강도 ≥ ATR(14) × 0.15 · SECONDARY 공통 거래량 1.5×
-
----
-
-## Telegram 알림 예시
-
-한 번의 스캔에서 발생한 신호는 **요약 메시지 1개**로 묶어 전송합니다. 신호가 없으면 메시지를 보내지 않습니다.
-
-```
-🚨 신호 요약 (UTC 01:56)
-📈 BTC LONG
- 🔥 4h: EMA Cross, BB Squeeze Breakout
- ⚡️ 1h: RSI
-📈 SOL LONG
- 🔥 4h: Engulfing
-📈 ETH LONG
- ⚡️ 1h: VWAP Cross
-📉 BTC SHORT
- ⚡️ 1h: RSI
-```
-
-- 묶는 기준: **코인 + 방향**별로 한 줄 헤더를 만들고, 그 아래 타임프레임을 `4h → 1h` 순으로 나열합니다.
-- 같은 타임프레임에서 여러 신호가 나오면 쉼표로 이어 씁니다.
-- 헤더의 시각은 UTC 기준 메시지 생성 시각입니다.
-
----
-
 ## 실행 흐름
 
-한 번의 실행(`python main.py`)은 아래 순서로 **166건**을 처리합니다.
+한 번의 실행(`python main.py`)은 아래 순서로 **204건**을 처리합니다.
 
 ```
-RSI (20) → MACD (18) → Stochastic (18)
-  → Engulfing (18) → EMA Cross (18) → VWAP Cross (10)
-  → Supertrend (18) → BB Squeeze (18) → MFI (20) → Parabolic SAR (8)
+RSI (27) → MACD (27) → Stochastic (27)
+  → Engulfing (27) → EMA Cross (27) → VWAP Cross (15)
+  → Supertrend (27) → BB Squeeze (27)
 ```
 
 각 검사마다:
@@ -323,7 +274,7 @@ Secrets는 워크플로우 로그에 표시되지 않습니다. 토큰을 README
 
 1. Fork 저장소의 **Actions** → `RSI Telegram Signal Bot`을 엽니다.
 2. **Run workflow**로 한 번 수동 실행합니다.
-3. 실행의 **Summary**에서 166건 검사와 오류 유무를 확인합니다.
+3. 실행의 **Summary**에서 204건 검사와 오류 유무를 확인합니다.
 4. 다음 정각 스케줄 실행 후 Telegram 알림을 확인합니다. 조건에 맞는 신호가 없으면 알림이 없는 것이 정상입니다.
 
 ---
@@ -378,7 +329,7 @@ Fine-grained PAT는 **Fork한 본인 저장소만** 선택하고, `Contents: Rea
 
 1. GitHub **Actions** → `RSI Telegram Signal Bot` 선택
 2. **Run workflow**로 수동 실행
-3. **Summary** 탭에서 166건 검사 결과 확인
+3. **Summary** 탭에서 204건 검사 결과 확인
 
 ---
 
