@@ -787,11 +787,15 @@ def send_telegram_message(message: str) -> None:
     if not token or not chat_id:
         raise RuntimeError("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be configured.")
 
-    response = requests.post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        json={"chat_id": chat_id, "text": message},
-        timeout=15,
-    )
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": message},
+            timeout=15,
+        )
+    except requests.RequestException as error:
+        # The request URL embeds the bot token; drop the original exception so it never reaches logs.
+        raise RuntimeError(f"Telegram sendMessage request failed: {type(error).__name__}") from None
     if not response.ok:
         description = response.text
         try:

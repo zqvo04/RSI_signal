@@ -97,6 +97,17 @@ class SignalPolicyTests(unittest.TestCase):
             " ⚡️ 1h: Engulfing",
         ]
 
+    def test_telegram_network_error_hides_token(self):
+        token = "123456789:SECRET_TOKEN_VALUE"
+        leak = main.requests.ConnectionError(f"Max retries exceeded with url: /bot{token}/sendMessage")
+        with patch.dict(main.os.environ, {"TELEGRAM_BOT_TOKEN": token, "TELEGRAM_CHAT_ID": "1"}), patch(
+            "main.requests.post", side_effect=leak
+        ):
+            with self.assertRaises(RuntimeError) as caught:
+                main.send_telegram_message("hi")
+        assert "SECRET_TOKEN_VALUE" not in str(caught.exception)
+        assert caught.exception.__suppress_context__ and caught.exception.__cause__ is None
+
     def test_flush_sends_once_and_clears(self):
         main._pending_signals[:] = [("BTC", "LONG", "1h", "RSI"), ("ETH", "LONG", "1h", "RSI")]
         with patch("main.send_telegram_message") as send:
