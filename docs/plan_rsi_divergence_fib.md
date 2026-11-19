@@ -65,7 +65,7 @@ FIB_MIN_RANGE_ATR = 3.0
 - 1회 발화 보장: `p2 == n-1-R` (방금 확정) + `is_freshly_closed`
 
 ### 2-3. `find_fib_signal(frame: pd.DataFrame, timeframe: str) -> Optional[tuple[str, str]]`
-- 반환: `(side, "Fib 0.5-0.618")` 또는 `None`
+- 반환: `(side, FIB_LABELS[side])` (LONG: "피보나치 되돌림 지지 반등(0.5~0.618)", SHORT: "피보나치 되돌림 저항 반락(0.5~0.618)") 또는 `None`
 - 가격 피벗: `lo_idx = find_pivots(completed["low"])[0]`, `hi_idx = find_pivots(completed["high"])[1]`
 - ATR: `ta.atr(completed high/low/close, 14)`의 **마지막 값**; NaN/≤0 → None
 - `c = n-1`, 미신선(`is_freshly_closed` False) → None

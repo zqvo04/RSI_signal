@@ -204,10 +204,10 @@ class SignalPolicyTests(unittest.TestCase):
         return {8: (100, 110, 99.9, 100), 15: (100, 100.1, 90, 100), 20: (101, 101.1, 100.4, 100.5)}
 
     def test_f1_long_fires(self):
-        assert self._fib(self._fib_frame(21, self._long_bars())) == ("LONG", "Fib 0.5-0.618")
+        assert self._fib(self._fib_frame(21, self._long_bars())) == ("LONG", main.FIB_LABELS["LONG"])
 
     def test_f2_short_fires(self):
-        assert self._fib(self._fib_frame(21, self._short_bars())) == ("SHORT", "Fib 0.5-0.618")
+        assert self._fib(self._fib_frame(21, self._short_bars())) == ("SHORT", main.FIB_LABELS["SHORT"])
 
     def test_f3_close_below_0786_invalidates(self):
         frame = self._fib_frame(21, self._long_bars() | {18: (100, 100.1, 93.9, 94.0)})
@@ -226,7 +226,7 @@ class SignalPolicyTests(unittest.TestCase):
         bars = {8: (100, 101, 97, 100), 15: (100, 103, 99, 100), 20: (99, 99.6, 98.5, 99.5)}
         assert self._fib(self._fib_frame(21, bars, base=wide)) is None
         bars.update({15: (100, 106, 99, 100), 20: (100.4, 101.2, 100.2, 101.0)})  # control: R=9 > 3*ATR fires
-        assert self._fib(self._fib_frame(21, bars, base=wide)) == ("LONG", "Fib 0.5-0.618")
+        assert self._fib(self._fib_frame(21, bars, base=wide)) == ("LONG", main.FIB_LABELS["LONG"])
         assert self._fib(self._fib_frame(21, {})) is None  # no pivots, no exception
 
 

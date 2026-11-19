@@ -291,7 +291,7 @@ RSI (27) → RSI 다이버전스 (27) → 피보나치 (27)   ← 같은 RSI 데
 🚨 신호 요약 (UTC 04:00)
 📈 BTC LONG
  🔥 4h: RSI 일반 Div
- ⚡️ 1h: Fib 0.5-0.618, EMA Cross
+ ⚡️ 1h: 피보나치 되돌림 지지 반등(0.5~0.618), EMA Cross
 📉 SOL SHORT
  ⚡️ 1h: RSI 히든 Div
 ```

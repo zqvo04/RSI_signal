@@ -88,6 +88,7 @@ FIB_ZONE_TOP = 0.5
 FIB_ZONE_BOTTOM = 0.618
 FIB_INVALID = 0.786
 FIB_MIN_RANGE_ATR = 3.0
+FIB_LABELS = {"LONG": "피보나치 되돌림 지지 반등(0.5~0.618)", "SHORT": "피보나치 되돌림 저항 반락(0.5~0.618)"}
 
 
 def create_exchange() -> ccxt.okx:
@@ -315,7 +316,7 @@ def find_fib_signal(frame: pd.DataFrame, timeframe: str) -> Optional[tuple[str, 
         cond = lambda k: high[k] >= zone_bottom and close[k] < zone_top and close[k] < open_[k]
         start = pl
     if cond(c) and not any(cond(k) for k in range(start + PIVOT_RIGHT, c)):
-        return side, "Fib 0.5-0.618"
+        return side, FIB_LABELS[side]
     return None
 
 
