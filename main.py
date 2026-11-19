@@ -248,6 +248,31 @@ def find_pivots(series: pd.Series, left: int, right: int) -> tuple[list[int], li
     return lows, highs
 
 
+def find_rsi_divergences(frame: pd.DataFrame, timeframe: str) -> list[tuple[str, str]]:
+    """Return [(side, label)] for regular/hidden RSI divergences confirmed on the latest closed candle."""
+    completed = completed_candles(frame, timeframe).reset_index(drop=True)
+    n = len(completed)
+    if n < PIVOT_LEFT + PIVOT_RIGHT + 2 or not is_freshly_closed(completed.iloc[-1], timeframe):
+        return []
+    rsi = completed["rsi"]
+    lows, highs = find_pivots(rsi, PIVOT_LEFT, PIVOT_RIGHT)
+    last = n - 1 - PIVOT_RIGHT
+    found: list[tuple[str, str]] = []
+    if len(lows) >= 2 and lows[-1] == last and DIV_RANGE_MIN + 1 <= lows[-1] - lows[-2] <= DIV_RANGE_MAX + 1:
+        p1, p2 = lows[-2], lows[-1]
+        if rsi[p2] > rsi[p1] and completed["low"][p2] < completed["low"][p1]:
+            found.append(("LONG", "RSI 일반 Div"))
+        elif rsi[p2] < rsi[p1] and completed["low"][p2] > completed["low"][p1]:
+            found.append(("LONG", "RSI 히든 Div"))
+    if len(highs) >= 2 and highs[-1] == last and DIV_RANGE_MIN + 1 <= highs[-1] - highs[-2] <= DIV_RANGE_MAX + 1:
+        h1, h2 = highs[-2], highs[-1]
+        if rsi[h2] < rsi[h1] and completed["high"][h2] > completed["high"][h1]:
+            found.append(("SHORT", "RSI 일반 Div"))
+        elif rsi[h2] > rsi[h1] and completed["high"][h2] < completed["high"][h1]:
+            found.append(("SHORT", "RSI 히든 Div"))
+    return found
+
+
 def passes_volume_filter(
     frame: pd.DataFrame,
     timeframe: str,

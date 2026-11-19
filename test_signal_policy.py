@@ -121,6 +121,53 @@ class SignalPolicyTests(unittest.TestCase):
         nan_low, _ = main.find_pivots(pd.Series([5, 5, float("nan"), 1, 5, 5, 5, 5]), 3, 3)
         assert nan_low == []
 
+    @staticmethod
+    def _div_frame(n, rsi_at, low_at=None, high_at=None):
+        """Flat rsi=50/price=100 frame with overrides {position: value}."""
+        rsi, low, high = [50.0] * n, [100.0] * n, [100.0] * n
+        for target, overrides in ((rsi, rsi_at), (low, low_at or {}), (high, high_at or {})):
+            for i, v in overrides.items():
+                target[i] = v
+        return pd.DataFrame({
+            "timestamp": [1_000_000_000_000 + i * 3_600_000 for i in range(n)],
+            "open": 100.0, "high": high, "low": low, "close": 100.0, "volume": 1.0, "rsi": rsi,
+        })
+
+    def _divs(self, frame):
+        with patch("main.is_freshly_closed", return_value=True):
+            return main.find_rsi_divergences(frame, "1h")
+
+    def test_v1_regular_bullish(self):
+        # p1=5, p2=15, n-1-R=15 -> n=19; rsi higher low, price lower low
+        frame = self._div_frame(19, {5: 30.0, 15: 35.0}, low_at={5: 90.0, 15: 80.0})
+        assert self._divs(frame) == [("LONG", "RSI 일반 Div")]
+
+    def test_v2_hidden_bullish(self):
+        frame = self._div_frame(19, {5: 35.0, 15: 30.0}, low_at={5: 80.0, 15: 90.0})
+        assert self._divs(frame) == [("LONG", "RSI 히든 Div")]
+
+    def test_v3_regular_bearish(self):
+        frame = self._div_frame(19, {5: 70.0, 15: 65.0}, high_at={5: 110.0, 15: 120.0})
+        assert self._divs(frame) == [("SHORT", "RSI 일반 Div")]
+
+    def test_v4_hidden_bearish(self):
+        frame = self._div_frame(19, {5: 65.0, 15: 70.0}, high_at={5: 120.0, 15: 110.0})
+        assert self._divs(frame) == [("SHORT", "RSI 히든 Div")]
+
+    def test_v5_distance_boundaries(self):
+        for gap, expected in ((5, []), (6, [("LONG", "RSI 일반 Div")]), (61, [("LONG", "RSI 일반 Div")]), (62, [])):
+            p2 = 5 + gap
+            frame = self._div_frame(p2 + 4, {5: 30.0, p2: 35.0}, low_at={5: 90.0, p2: 80.0})
+            assert self._divs(frame) == expected, gap
+
+    def test_v6_pivot_not_on_latest_confirmation_bar(self):
+        frame = self._div_frame(20, {5: 30.0, 15: 35.0}, low_at={5: 90.0, 15: 80.0})
+        assert self._divs(frame) == []
+
+    def test_v7_insufficient_data(self):
+        assert self._divs(self._div_frame(9, {})) == []
+        assert self._divs(self._div_frame(0, {})) == []
+
 
 if __name__ == "__main__":
     unittest.main()
