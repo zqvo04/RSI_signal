@@ -16,6 +16,7 @@ import time
 from typing import Optional
 
 import ccxt
+import numpy as np
 import pandas as pd
 import pandas_ta as ta
 import requests
@@ -79,6 +80,14 @@ VWAP_WINDOW = {"1h": 24, "4h": 6, "1d": 7}
 VWAP_BREAKOUT_STRENGTH = {"1h": 1.003, "4h": 1.0015, "1d": 1.0015}
 VWAP_BREAKDOWN_STRENGTH = {"1h": 0.997, "4h": 0.9985, "1d": 0.9985}
 OKX_BAR = {"1h": "1H", "4h": "4H", "1d": "1Dutc"}
+PIVOT_LEFT = 5
+PIVOT_RIGHT = 3
+DIV_RANGE_MIN = 5    # TV rangeLower
+DIV_RANGE_MAX = 60   # TV rangeUpper
+FIB_ZONE_TOP = 0.5
+FIB_ZONE_BOTTOM = 0.618
+FIB_INVALID = 0.786
+FIB_MIN_RANGE_ATR = 3.0
 
 
 def create_exchange() -> ccxt.okx:
@@ -219,6 +228,24 @@ def is_freshly_closed(current: pd.Series, timeframe: str) -> bool:
     now_ms = int(time.time() * 1000)
     close_ms = int(current["timestamp"]) + TIMEFRAME_MILLISECONDS[timeframe]
     return now_ms - close_ms < SCAN_INTERVAL_SECONDS * 1000
+
+
+def find_pivots(series: pd.Series, left: int, right: int) -> tuple[list[int], list[int]]:
+    """Return positional (low, high) pivot indexes; NaN in a window or short data gives none."""
+    values = series.to_numpy(dtype=float)
+    lows: list[int] = []
+    highs: list[int] = []
+    for i in range(left, len(values) - right):
+        window = values[i - left:i + right + 1]
+        if np.isnan(window).any():
+            continue
+        v = values[i]
+        before, after = values[i - left:i], values[i + 1:i + right + 1]
+        if v < before.min() and v <= after.min():
+            lows.append(i)
+        if v > before.max() and v >= after.max():
+            highs.append(i)
+    return lows, highs
 
 
 def passes_volume_filter(

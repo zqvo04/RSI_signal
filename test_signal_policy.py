@@ -105,6 +105,22 @@ class SignalPolicyTests(unittest.TestCase):
         assert send.call_count == 1
         assert main._pending_signals == []
 
+    def test_p1_find_pivots_single_low_and_high(self):
+        low, high = main.find_pivots(pd.Series([5, 5, 5, 1, 5, 5, 5, 5, 9, 5, 5, 5]), 3, 3)
+        assert low == [3]
+        assert high == [8]
+
+    def test_p2_find_pivots_needs_right_bars(self):
+        low, high = main.find_pivots(pd.Series([5, 5, 5, 5, 5, 1, 5, 5]), 3, 3)
+        assert low == [] and high == []
+        assert main.find_pivots(pd.Series([1.0, 2.0]), 3, 3) == ([], [])
+
+    def test_p3_find_pivots_equal_values_single(self):
+        low, _ = main.find_pivots(pd.Series([5, 5, 5, 1, 1, 5, 5, 5, 5]), 3, 3)
+        assert low == [3]
+        nan_low, _ = main.find_pivots(pd.Series([5, 5, float("nan"), 1, 5, 5, 5, 5]), 3, 3)
+        assert nan_low == []
+
 
 if __name__ == "__main__":
     unittest.main()
