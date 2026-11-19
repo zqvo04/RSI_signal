@@ -10,8 +10,8 @@ OKX USDT 무기한 선물의 기술적 신호를 감지해 Telegram으로 알려
 | 항목 | 내용 |
 | --- | --- |
 | 감시 코인 | BTC, ETH, SOL, HYPE, DOGE, XRP, LIT, SUI, BNB (9개) |
-| 신호 종류 | RSI · MACD · Stochastic · Engulfing · EMA Cross · VWAP Cross · Supertrend · BB Squeeze |
-| 1회 검사 | **204건** (코인 × 타임프레임 × 신호 조합) |
+| 신호 종류 | RSI · RSI Divergence · Fibonacci · MACD · Stochastic · Engulfing · EMA Cross · VWAP Cross · Supertrend · BB Squeeze |
+| 1회 검사 | **258건** (코인 × 타임프레임 × 신호 조합) |
 | 실행 주기 | 매 15분 정각 (`00`, `15`, `30`, `45`분, 외부 크론 → GitHub Actions) |
 | 거래소 | OKX USDT 무기한 선물 (`COIN/USDT:USDT`) |
 
@@ -20,6 +20,8 @@ OKX USDT 무기한 선물의 기술적 신호를 감지해 Telegram으로 알려
 | 신호 | 타임프레임 | 대상 코인 | 검사 건수 |
 | --- | --- | --- | ---: |
 | RSI(14) | 1h, 4h, 1d | 9코인 | 27 |
+| RSI Divergence (TV 방식) | 1h, 4h, 1d | 9코인 | 27 |
+| Fibonacci 되돌림 | 1h, 4h, 1d | 9코인 | 27 |
 | MACD(12,26,9) | 1h, 4h, 1d | 9코인 | 27 |
 | Stochastic(KDJ 14,3,3) | 1h, 4h, 1d | 9코인 | 27 |
 | Engulfing | 1h, 4h, 1d | 9코인 | 27 |
@@ -68,6 +70,8 @@ OKX USDT 무기한 선물의 기술적 신호를 감지해 Telegram으로 알려
 | CORE | RSI · MACD · Engulfing · EMA Cross · VWAP Cross | 0.9× · 0.9× · 1.2× · 1.0× · 1.0× |
 | SECONDARY | Stochastic · Supertrend · BB Squeeze Breakout | 1.5× (공통) |
 
+RSI Divergence · Fibonacci는 거래량 필터를 적용하지 않습니다.
+
 ### 4. SECONDARY 상위 TF 방향 필터
 
 - 적용 대상: **SECONDARY 신호만** 적용
@@ -109,6 +113,39 @@ OKX USDT 무기한 선물의 기술적 신호를 감지해 Telegram으로 알려
 | --- | --- |
 | 📈 LONG | 이전 완료 캔들 RSI < 30 → 최근 완료 캔들 RSI ≥ 30 |
 | 📉 SHORT | 이전 완료 캔들 RSI > 70 → 최근 완료 캔들 RSI ≤ 70 |
+
+---
+
+### RSI 다이버전스 (TradingView 방식)
+
+RSI(14)에서 피벗을 탐지하고, 그 봉의 **가격(저가/고가)** 을 비교합니다.
+
+- 피벗: 좌 5봉 / 우 3봉 기준. 우측 3봉이 확정되어야 피벗이 확정되므로 신호가 최대 3봉 늦게 나옵니다.
+- 연속한 두 피벗 간격: 5–60봉 (TradingView 기준)
+
+| 방향 | 조건 |
+| --- | --- |
+| 📈 LONG (일반 상승) | 가격 LL, RSI HL |
+| 📈 LONG (히든 상승) | 가격 HL, RSI LL |
+| 📉 SHORT (일반 하락) | 가격 HH, RSI LH |
+| 📉 SHORT (히든 하락) | 가격 LH, RSI HH |
+
+**TV 대조:** TradingView RSI Divergence Indicator에서 Pivot Lookback Left=5, Right=3, Range 5–60, Hidden 표시 ON  
+거래량 필터·상위 TF 필터 미적용, RSI와 같은 데이터 재사용(추가 API 호출 없음)
+
+---
+
+### 피보나치 되돌림 (0.5–0.618)
+
+가격 피벗(좌 5 / 우 3) 기준으로 **직전 스윙**을 잡고, 되돌림 구간에서 반등·반락을 확인합니다. 스윙당 최초 1회만 발화합니다.
+
+| 방향 | 조건 |
+| --- | --- |
+| 📈 LONG | 마지막 스윙이 고점이고 저점→고점 파동. 저가가 0.5 되돌림 이하 터치 + 종가가 0.618 위 + 양봉인 첫 캔들 |
+| 📉 SHORT | 마지막 스윙이 저점이고 고점→저점 파동. 고가가 0.5 되돌림 이상 터치 + 종가가 0.618 아래 + 음봉인 첫 캔들 |
+
+**무효:** 0.786 이탈 마감 · 고점(저점) 갱신 · 파동 폭 < ATR(14)×3 · 파동 간격 > 60봉  
+거래량 필터·상위 TF 필터 미적용, RSI와 같은 데이터 재사용(추가 API 호출 없음)
 
 ---
 
@@ -205,10 +242,10 @@ TypicalPrice = (High + Low + Close) / 3
 
 ## 실행 흐름
 
-한 번의 실행(`python main.py`)은 아래 순서로 **204건**을 처리합니다.
+한 번의 실행(`python main.py`)은 아래 순서로 **258건**을 처리합니다.
 
 ```
-RSI (27) → MACD (27) → Stochastic (27)
+RSI (27) → RSI Div (27) → Fib (27) → MACD (27) → Stochastic (27)
   → Engulfing (27) → EMA Cross (27) → VWAP Cross (15)
   → Supertrend (27) → BB Squeeze (27)
 ```
@@ -274,7 +311,7 @@ Secrets는 워크플로우 로그에 표시되지 않습니다. 토큰을 README
 
 1. Fork 저장소의 **Actions** → `RSI Telegram Signal Bot`을 엽니다.
 2. **Run workflow**로 한 번 수동 실행합니다.
-3. 실행의 **Summary**에서 204건 검사와 오류 유무를 확인합니다.
+3. 실행의 **Summary**에서 258건 검사와 오류 유무를 확인합니다.
 4. 다음 정각 스케줄 실행 후 Telegram 알림을 확인합니다. 조건에 맞는 신호가 없으면 알림이 없는 것이 정상입니다.
 
 ---
@@ -329,7 +366,7 @@ Fine-grained PAT는 **Fork한 본인 저장소만** 선택하고, `Contents: Rea
 
 1. GitHub **Actions** → `RSI Telegram Signal Bot` 선택
 2. **Run workflow**로 수동 실행
-3. **Summary** 탭에서 204건 검사 결과 확인
+3. **Summary** 탭에서 258건 검사 결과 확인
 
 ---
 
