@@ -1054,6 +1054,8 @@ def main() -> None:
     error_count = 0
     signal_breakdown = {
         "RSI": {"checked": 0, "signals": 0},
+        "RSI Divergence": {"checked": 0, "signals": 0},
+        "Fibonacci": {"checked": 0, "signals": 0},
         "MACD": {"checked": 0, "signals": 0},
         "Stochastic": {"checked": 0, "signals": 0},
         "Engulfing": {"checked": 0, "signals": 0},
@@ -1099,6 +1101,30 @@ def main() -> None:
                 ):
                     signal_count += 1
                     signal_breakdown["RSI"]["signals"] += 1
+                checked_count += 1
+                signal_breakdown["RSI Divergence"]["checked"] += 1
+                try:
+                    for side, label in find_rsi_divergences(frame, timeframe):
+                        _pending_signals.append((coin, side, timeframe, label))
+                        signal_count += 1
+                        signal_breakdown["RSI Divergence"]["signals"] += 1
+                        logging.info("Queued %s %s signal for %s (%s)", label, side, symbol, timeframe)
+                except (ValueError, KeyError, IndexError) as error:
+                    error_count += 1
+                    logging.exception("Failed to check RSI Divergence %s (%s): %s", symbol, timeframe, error)
+                checked_count += 1
+                signal_breakdown["Fibonacci"]["checked"] += 1
+                try:
+                    fib_signal = find_fib_signal(frame, timeframe)
+                    if fib_signal is not None:
+                        side, label = fib_signal
+                        _pending_signals.append((coin, side, timeframe, label))
+                        signal_count += 1
+                        signal_breakdown["Fibonacci"]["signals"] += 1
+                        logging.info("Queued %s %s signal for %s (%s)", label, side, symbol, timeframe)
+                except (ValueError, KeyError, IndexError) as error:
+                    error_count += 1
+                    logging.exception("Failed to check Fibonacci %s (%s): %s", symbol, timeframe, error)
             except (ccxt.BaseError, requests.RequestException, ValueError, RuntimeError) as error:
                 error_count += 1
                 logging.exception("Failed to check RSI %s (%s): %s", symbol, timeframe, error)
