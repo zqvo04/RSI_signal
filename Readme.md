@@ -1,7 +1,7 @@
 # OKX 텔레그램 시그널 봇
 
 OKX USDT 무기한 선물의 기술적 신호를 감지해 Telegram으로 알려주는 **GitHub Actions 기반 정보성 알림봇**입니다.  
-주문을 실행하지 않으며, OKX 공개 OHLCV 데이터만 사용합니다.
+주문을 실행하지 않으며, OKX 공개 OHLCV 데이터만 사용합니다. OKX API Key는 필요 없습니다.
 
 ---
 
@@ -10,44 +10,41 @@ OKX USDT 무기한 선물의 기술적 신호를 감지해 Telegram으로 알려
 | 항목 | 내용 |
 | --- | --- |
 | 감시 코인 | BTC, ETH, SOL, HYPE, DOGE, XRP, LIT, SUI, BNB (9개) |
-| 신호 종류 | RSI · RSI Divergence · Fibonacci · MACD · Stochastic · Engulfing · EMA Cross · VWAP Cross · Supertrend · BB Squeeze |
-| 1회 검사 | **258건** (코인 × 타임프레임 × 신호 조합) |
+| 신호 종류 | RSI · **RSI 다이버전스** · **피보나치 되돌림** · MACD · Stochastic · Engulfing · EMA Cross · VWAP Cross · Supertrend · BB Squeeze (10종) |
+| 타임프레임 | 1h · 4h · 1d (모든 신호 공통) |
+| 1회 검사 | **258건** (코인 × 타임프레임 × 신호) |
 | 실행 주기 | 매 15분 정각 (`00`, `15`, `30`, `45`분, 외부 크론 → GitHub Actions) |
 | 거래소 | OKX USDT 무기한 선물 (`COIN/USDT:USDT`) |
 
 ### 신호별 검사 범위
 
-| 신호 | 타임프레임 | 대상 코인 | 검사 건수 |
+| 신호 | 그룹 | 대상 코인 | 검사 건수 |
 | --- | --- | --- | ---: |
-| RSI(14) | 1h, 4h, 1d | 9코인 | 27 |
-| RSI Divergence (TV 방식) | 1h, 4h, 1d | 9코인 | 27 |
-| Fibonacci 되돌림 | 1h, 4h, 1d | 9코인 | 27 |
-| MACD(12,26,9) | 1h, 4h, 1d | 9코인 | 27 |
-| Stochastic(KDJ 14,3,3) | 1h, 4h, 1d | 9코인 | 27 |
-| Engulfing | 1h, 4h, 1d | 9코인 | 27 |
-| EMA Cross(8/21) | 1h, 4h, 1d | 9코인 | 27 |
-| VWAP Cross | 1h, 4h, 1d | BTC, ETH, SOL, BNB, XRP | 15 |
-| Supertrend (ATR 10, 3.0) | 1h, 4h, 1d | 9코인 | 27 |
-| BB Squeeze Breakout | 1h, 4h, 1d | 9코인 | 27 |
+| RSI(14) | CORE | 9코인 | 27 |
+| RSI 다이버전스 (일반·히든 / 롱·숏) | 구조 신호 | 9코인 | 27 |
+| 피보나치 되돌림 0.5–0.618 (롱·숏) | 구조 신호 | 9코인 | 27 |
+| MACD(12,26,9) | CORE | 9코인 | 27 |
+| Stochastic(KDJ 14,3,3) | SECONDARY | 9코인 | 27 |
+| Engulfing | CORE | 9코인 | 27 |
+| EMA Cross(8/21) | CORE | 9코인 | 27 |
+| VWAP Cross | CORE | BTC, ETH, SOL, BNB, XRP | 15 |
+| Supertrend (ATR 10, 3.0) | SECONDARY | 9코인 | 27 |
+| BB Squeeze Breakout | SECONDARY | 9코인 | 27 |
 
 감시 대상은 [main.py](main.py) 상단의 `WATCHLIST`, `VWAP_COINS`에서 수정할 수 있습니다.
 
 ---
 
-## 공통 규칙
-
-모든 신호는 아래 3가지 규칙을 **반드시** 통과해야 알림이 발송됩니다.
+## 공통 규칙 (모든 신호)
 
 ### 1. 완성 캔들만 사용
 
-- 진행 중인 캔들은 사용하지 않습니다.
-- 캔들 종료 시각 + **30초 여유**(`CANDLE_CLOSE_GRACE_SECONDS`) 후, 확정된 최근 **2개** 완료 캔들로 신호를 판정합니다.
-- 새 지표 4종은 OKX `/api/v5/market/history-candles`의 `confirm = "1"`인 캔들만 사용합니다.
+- 진행 중인 캔들은 사용하지 않습니다. 캔들 종료 시각 + **30초 여유**(`CANDLE_CLOSE_GRACE_SECONDS`)가 지난 캔들만 완성 캔들로 봅니다.
+- Supertrend · BB Squeeze · 상위 TF 방향 판정은 OKX `/api/v5/market/history-candles`의 `confirm = "1"` 캔들만 추가로 확인합니다.
 
-### 2. 중복 알림 방지
+### 2. 1회만 발화 (중복 방지)
 
-- 돌파가 발생한 캔들이 **방금 닫힌 직후 첫 실행**에서만 알림을 보냅니다 (`is_freshly_closed`).
-- 매 15분 정각에 스캔하므로 1h/4h 신호는 캔들 종료 뒤 처음 시작된 실행에서만 1회 발화합니다. GitHub Actions 대기 시간으로 실제 시작 시각은 약간 늦어질 수 있습니다.
+신호 캔들이 **방금 닫힌 직후 첫 실행**에서만 알림을 보냅니다 (`is_freshly_closed`).
 
 | 타임프레임 | 발화 시점 |
 | --- | --- |
@@ -55,53 +52,50 @@ OKX USDT 무기한 선물의 기술적 신호를 감지해 Telegram으로 알려
 | 4h | 완성봉 종료 후 첫 실행 → 이후 15회 건너뜀 |
 | 1d | OKX 일봉(`1Dutc`, UTC 00:00 = KST 09:00 마감) 종료 후 첫 실행 → 이후 95회 건너뜀 |
 
-### 3. 거래량 필터
+GitHub Actions 대기 시간 때문에 실제 시작 시각은 몇 분 늦어질 수 있습니다.
 
-신호 캔들(돌파가 발생한 최근 완료 캔들)의 거래량이 아래 기준을 만족해야 통과합니다.
+### 3. 신뢰도 태그
+
+| 타임프레임 | 태그 |
+| --- | --- |
+| 1d | 🏆 최고 신뢰도 |
+| 4h | 🔥 높은 신뢰도 |
+| 1h | ⚡️ 중간 신뢰도 |
+
+---
+
+## 그룹별 필터
+
+| 그룹 | 거래량 필터 | 상위 TF 방향 필터 |
+| --- | --- | --- |
+| CORE | 신호별 배수 적용 | 미적용 |
+| SECONDARY | 1.5× | 1h만 적용 (4h 방향 일치) |
+| 구조 신호 (RSI 다이버전스 · 피보나치) | 미적용 | 미적용 |
+
+구조 신호는 신호 캔들이 스윙 봉이 아니라 "스윙 확정 봉"이라 거래량 비교의 의미가 맞지 않고, 일반 다이버전스는 본래 역추세 신호라 추세 필터를 걸지 않습니다.
+
+### 거래량 필터
 
 `신호 캔들 거래량 >= 직전 20개 완료 캔들 평균 거래량 × 최소 배수`
 
-- 평균 계산 구간: 신호 캔들 **직전** 완료 캔들 20개
-- 비교 대상: 신호가 발생한 가장 최근 완료 캔들 1개
-- 해석: 최소 배수가 클수록 "평소 대비 거래량이 더 강하게 터진 신호"만 통과
+| 신호 | 최소 배수 |
+| --- | ---: |
+| RSI · MACD | 0.9× |
+| EMA Cross · VWAP Cross | 1.0× |
+| Engulfing | 1.2× |
+| Stochastic · Supertrend · BB Squeeze | 1.5× |
 
-| 세트 | 포함 신호 | 최소 배수 |
-| --- | --- | ---: |
-| CORE | RSI · MACD · Engulfing · EMA Cross · VWAP Cross | 0.9× · 0.9× · 1.2× · 1.0× · 1.0× |
-| SECONDARY | Stochastic · Supertrend · BB Squeeze Breakout | 1.5× (공통) |
+미통과 신호는 차단되고 로그에 `Skipped ... volume below ...`로 남습니다.
 
-RSI Divergence · Fibonacci는 거래량 필터를 적용하지 않습니다.
+### 상위 TF 방향 필터 (SECONDARY)
 
-### 4. SECONDARY 상위 TF 방향 필터
-
-- 적용 대상: **SECONDARY 신호만** 적용
-- 매핑 기준: `HIGHER_TF_MAP = {1h: 4h}`
-  - 1h SECONDARY 신호 → 4h 방향과 일치해야 통과
-- `4h`·`1d` SECONDARY는 정책상 단독 신뢰로 간주하여 상위 TF 필터를 적용하지 않습니다(우회 통과).
-
-#### 상위 TF의 LONG / SHORT 판정 기준
-
-상위 TF의 최근 완료 캔들에서 EMA(8), EMA(21), 종가 위치로 방향을 판정합니다.
-
-- **LONG**
-  - 종가(`close`) > EMA21
-  - EMA8 >= EMA21
-- **SHORT**
-  - 종가(`close`) < EMA21
-  - EMA8 <= EMA21
-- 위 두 조건에 모두 해당하지 않으면 **중립(None)** 으로 간주합니다.
-
-#### 통과/차단 규칙
-
-- 상위 TF 방향이 신호 방향과 같으면 통과
-- 상위 TF 방향이 중립(None)이면 차단
-- 상위 TF 데이터 부족, 조회 오류, 매핑 없음도 모두 fail-closed로 차단
-
-### 신뢰도 태그
-
-- `1d` → 🏆 최고 신뢰도
-- `4h` → 🔥 높은 신뢰도
-- `1h` → ⚡️ 중간 신뢰도
+- `HIGHER_TF_MAP = {1h: 4h}`: 1h SECONDARY 신호는 4h 방향과 일치해야 통과합니다.
+- 4h · 1d SECONDARY는 단독 신뢰로 보고 우회 통과합니다.
+- 4h 방향은 최근 완료 캔들 기준입니다.
+  - **LONG**: 종가 > EMA21 그리고 EMA8 ≥ EMA21
+  - **SHORT**: 종가 < EMA21 그리고 EMA8 ≤ EMA21
+  - 그 외는 중립
+- 중립 · 데이터 부족 · 조회 오류는 모두 **차단**(fail-closed)합니다.
 
 ---
 
@@ -118,34 +112,65 @@ RSI Divergence · Fibonacci는 거래량 필터를 적용하지 않습니다.
 
 ### RSI 다이버전스 (TradingView 방식)
 
-RSI(14)에서 피벗을 탐지하고, 그 봉의 **가격(저가/고가)** 을 비교합니다.
+TradingView 기본 **RSI Divergence Indicator**와 같은 방식입니다. **RSI(14)에서 스윙(피벗)을 찾고, 그 봉의 가격(저가/고가)을 비교**합니다.
 
-- 피벗: 좌 5봉 / 우 3봉 기준. 우측 3봉이 확정되어야 피벗이 확정되므로 신호가 최대 3봉 늦게 나옵니다.
-- 연속한 두 피벗 간격: 5–60봉 (TradingView 기준)
+**피벗 정의** (좌 5봉 / 우 3봉)
 
-| 방향 | 조건 |
-| --- | --- |
-| 📈 LONG (일반 상승) | 가격 LL, RSI HL |
-| 📈 LONG (히든 상승) | 가격 HL, RSI LL |
-| 📉 SHORT (일반 하락) | 가격 HH, RSI LH |
-| 📉 SHORT (히든 하락) | 가격 LH, RSI HH |
+- 피벗 저점: RSI가 왼쪽 5봉보다 낮고, 오른쪽 3봉보다 낮거나 같음
+- 피벗 고점: RSI가 왼쪽 5봉보다 높고, 오른쪽 3봉보다 높거나 같음
+- 오른쪽 3봉이 닫혀야 피벗이 확정됩니다. 그래서 신호는 **스윙 봉보다 3봉 늦게** 나갑니다. 1h는 3시간, 4h는 12시간, 1d는 3일입니다.
 
-**TV 대조:** TradingView RSI Divergence Indicator에서 Pivot Lookback Left=5, Right=3, Range 5–60, Hidden 표시 ON  
-거래량 필터·상위 TF 필터 미적용, RSI와 같은 데이터 재사용(추가 API 호출 없음)
+**판정**: 연속한 두 피벗(직전 피벗 → 방금 확정된 피벗)만 비교합니다.
+
+| 종류 | 방향 | 가격 | RSI |
+| --- | --- | --- | --- |
+| 일반 상승 | 📈 LONG | 저점 하락 (LL) | 저점 상승 (HL) |
+| 히든 상승 | 📈 LONG | 저점 상승 (HL) | 저점 하락 (LL) |
+| 일반 하락 | 📉 SHORT | 고점 상승 (HH) | 고점 하락 (LH) |
+| 히든 하락 | 📉 SHORT | 고점 하락 (LH) | 고점 상승 (HH) |
+
+- 두 피벗 간격은 TradingView Range 5–60과 같습니다. 실제 봉 간격으로는 6–61봉입니다.
+- 값이 같으면(동률) 신호를 내지 않습니다.
+- 저점 쪽과 고점 쪽이 같은 봉에서 동시에 확정되면 두 신호 모두 보냅니다.
+
+**TradingView 대조 설정**: RSI Divergence Indicator → Pivot Lookback Left `5`, Right `3`, Range `5`–`60`, Hidden Bullish/Bearish 표시 ON.  
+TradingView는 라벨을 스윙 봉에 표시하므로, 봇 알림 시각보다 3봉 앞에 라벨이 보이면 일치하는 것입니다.
 
 ---
 
 ### 피보나치 되돌림 (0.5–0.618)
 
-가격 피벗(좌 5 / 우 3) 기준으로 **직전 스윙**을 잡고, 되돌림 구간에서 반등·반락을 확인합니다. 스윙당 최초 1회만 발화합니다.
+**가격 스윙**(저가·고가 피벗, 좌 5 / 우 3)으로 직전 파동을 잡고, 되돌림이 0.5–0.618 구간에 닿은 뒤 반대로 마감하는 **첫 캔들**에서 신호를 보냅니다.
 
-| 방향 | 조건 |
-| --- | --- |
-| 📈 LONG | 마지막 스윙이 고점이고 저점→고점 파동. 저가가 0.5 되돌림 이하 터치 + 종가가 0.618 위 + 양봉인 첫 캔들 |
-| 📉 SHORT | 마지막 스윙이 저점이고 고점→저점 파동. 고가가 0.5 되돌림 이상 터치 + 종가가 0.618 아래 + 음봉인 첫 캔들 |
+| 방향 | 셋업 | 발화 캔들 |
+| --- | --- | --- |
+| 📈 LONG | 마지막 스윙이 **고점**: 저점(L) → 고점(H) 상승 후 되돌림 중 | 저가 ≤ 0.5 레벨 · 종가 > 0.618 레벨 · 양봉 |
+| 📉 SHORT | 마지막 스윙이 **저점**: 고점(H) → 저점(L) 하락 후 반등 중 | 고가 ≥ 0.5 레벨 · 종가 < 0.618 레벨 · 음봉 |
 
-**무효:** 0.786 이탈 마감 · 고점(저점) 갱신 · 파동 폭 < ATR(14)×3 · 파동 간격 > 60봉  
-거래량 필터·상위 TF 필터 미적용, RSI와 같은 데이터 재사용(추가 API 호출 없음)
+레벨 계산 (파동 폭 `R = H − L`)
+
+| 레벨 | LONG | SHORT |
+| --- | --- | --- |
+| 0.5 | H − 0.5R | L + 0.5R |
+| 0.618 | H − 0.618R | L + 0.618R |
+| 0.786 (무효선) | H − 0.786R | L + 0.786R |
+
+**예시 (LONG)**: L=100, H=200
+
+- 구간은 150 ~ 138.2, 무효선은 121.4입니다.
+- 저가 140, 종가 152인 양봉이 처음 나오면 → 📈 LONG
+
+**셋업 무효 조건**
+
+- 파동 폭 < ATR(14) × 3 (작은 파동 무시)
+- 파동 간격 > 60봉
+- 스윙 이후 0.786 레벨 밖으로 종가가 마감
+- 스윙 이후 고점(LONG) / 저점(SHORT)을 갱신
+
+**참고**
+
+- 같은 스윙에서는 최초 1회만 발화합니다.
+- 되돌림 중 새 스윙 저점이 확정되면 구조가 바뀌어 반대 방향(SHORT) 셋업으로 넘어갈 수 있습니다.
 
 ---
 
@@ -160,9 +185,9 @@ DIF = MACD선, DEA = Signal선
 
 ---
 
-### Stochastic — OKX KDJ (14, 3, 3)
+### Stochastic: OKX KDJ (14, 3, 3)
 
-%K = 14주기 Stochastic, %D = %K의 3주기 SMA
+%K = 14주기 Stochastic, %D = %K의 3주기 SMA (J는 사용하지 않음)
 
 | 방향 | 조건 |
 | --- | --- |
@@ -175,10 +200,15 @@ DIF = MACD선, DEA = Signal선
 
 | 방향 | 핵심 조건 |
 | --- | --- |
-| 📈 Bullish | 음봉→양봉 감싸기, 바디 강도(1h 1.1× / 4h 1.0×), Close > EMA20, 저점이 직전 8/5봉 최저 이하 |
-| 📉 Bearish | 양봉→음봉 감싸기, 바디 강도, Close < EMA20, 고점이 직전 8/5봉 최고 이상 |
+| 📈 Bullish | 음봉→양봉 감싸기, 종가 > EMA20, 저가가 직전 N봉 최저가 이하(0.5% 허용) |
+| 📉 Bearish | 양봉→음봉 감싸기, 종가 < EMA20, 고가가 직전 N봉 최고가 이상(0.5% 허용) |
 
-**추가 필터:** 도지 차단 · 꼬리 과다 차단 · 직전 3봉 내 동일 방향 Engulfing 차단 · 종가가 바디 중간 이상/이하
+| 타임프레임 | 바디 강도 (현재/직전 바디) | 직전 N봉 |
+| --- | ---: | ---: |
+| 1h | 1.1× | 8 |
+| 4h · 1d | 1.0× | 5 |
+
+**추가 필터:** 도지 차단 · 꼬리 과다 차단 · 직전 3봉 내 같은 방향 Engulfing 차단 · 종가가 바디 중간 이상(Bullish)/이하(Bearish)
 
 ---
 
@@ -186,8 +216,8 @@ DIF = MACD선, DEA = Signal선
 
 | 방향 | 핵심 조건 |
 | --- | --- |
-| 📈 Golden Cross | EMA8이 EMA21을 아래→위 돌파, Close > EMA8, 직전 3봉 모두 EMA8 < EMA21 |
-| 📉 Dead Cross | EMA8이 EMA21을 위→아래 돌파, Close < EMA8, 직전 3봉 모두 EMA8 > EMA21 |
+| 📈 Golden Cross | EMA8이 EMA21을 아래→위 돌파, 종가 > EMA8, 직전 3봉 모두 EMA8 < EMA21 |
+| 📉 Dead Cross | EMA8이 EMA21을 위→아래 돌파, 종가 < EMA8, 직전 3봉 모두 EMA8 > EMA21 |
 
 **추가 필터:** \|EMA8 − EMA21\| ≥ ATR(14) × 0.15 · EMA8 기울기(3봉) 방향 일치
 
@@ -195,20 +225,18 @@ DIF = MACD선, DEA = Signal선
 
 ### VWAP Cross (BTC · ETH · SOL · BNB · XRP)
 
-| 타임프레임 | VWAP 계산 기간 |
-| --- | ---: |
-| 1h | 최근 24개 완료 캔들 |
-| 4h | 최근 6개 완료 캔들 |
+`VWAP = Σ(TypicalPrice × Volume) / Σ(Volume)`, `TypicalPrice = (High + Low + Close) / 3`
 
-공식: `VWAP = Σ(TypicalPrice × Volume) / Σ(Volume)`  
-TypicalPrice = (High + Low + Close) / 3
+| 타임프레임 | VWAP 계산 기간 | 돌파 강도 |
+| --- | ---: | ---: |
+| 1h | 최근 24봉 | 0.3% |
+| 4h | 최근 6봉 | 0.15% |
+| 1d | 최근 7봉 | 0.15% |
 
 | 방향 | 핵심 조건 |
 | --- | --- |
-| 📈 상향 돌파 | Close가 VWAP 아래→위 돌파, 돌파 강도(1h 0.3% / 4h 0.15%), 직전 4봉 모두 VWAP 아래, 양봉 |
-| 📉 하향 돌파 | Close가 VWAP 위→아래 돌파, 돌파 강도, 직전 4봉 모두 VWAP 위, 음봉 |
-
-**추가 필터:** 종가가 캔들 상·하단 40% 이내 · 거래량 1.3× + 직전 3봉 평균 초과
+| 📈 상향 돌파 | 종가가 VWAP 아래→위 돌파, 돌파 강도 이상, 직전 4봉 모두 VWAP 아래, 양봉 |
+| 📉 하향 돌파 | 종가가 VWAP 위→아래 돌파, 돌파 강도 이상, 직전 4봉 모두 VWAP 위, 음봉 |
 
 ---
 
@@ -219,123 +247,100 @@ TypicalPrice = (High + Low + Close) / 3
 
 | 방향 | 핵심 조건 |
 | --- | --- |
-| 📈 LONG | Close가 Supertrend를 아래→위 돌파하고 양봉 |
-| 📉 SHORT | Close가 Supertrend를 위→아래 돌파하고 음봉 |
+| 📈 LONG | 종가가 Supertrend를 아래→위 돌파하고 양봉 |
+| 📉 SHORT | 종가가 Supertrend를 위→아래 돌파하고 음봉 |
 
-**추가 필터:** 돌파 강도 ≥ ATR(10) × 0.2 · 직전 3봉이 돌파 전 추세 방향 유지 · SECONDARY 공통 거래량 1.5×
+**추가 필터:** 돌파 강도 ≥ ATR(10) × 0.2 · 직전 3봉이 돌파 전 추세 방향 유지
 
 ---
 
-### Bollinger Bands %B + Squeeze Breakout
+### BB Squeeze Breakout
 
-20주기 SMA와 표준편차(σ)로 밴드를 계산합니다. `Upper = SMA20 + 2σ`, `Lower = SMA20 − 2σ`입니다.
+20주기 SMA와 표준편차(σ)로 밴드를 계산합니다. `Upper = SMA20 + 2σ`, `Lower = SMA20 − 2σ`
 
 | 방향 | 핵심 조건 |
 | --- | --- |
-| 📈 LONG | 직전 4봉이 Upper Band 이하이며, Close가 Upper Band를 상향 돌파하고 양봉 |
-| 📉 SHORT | 직전 4봉이 Lower Band 이상이며, Close가 Lower Band를 하향 돌파하고 음봉 |
+| 📈 LONG | 직전 4봉이 Upper Band 이하, 종가가 Upper Band를 상향 돌파하고 양봉 |
+| 📉 SHORT | 직전 4봉이 Lower Band 이상, 종가가 Lower Band를 하향 돌파하고 음봉 |
 
-**Squeeze 조건:** 최근 신호봉 직전 10봉 중 8봉 이상이 `BB Width ≤ ATR(14) × 1.5`여야 합니다.  
-**추가 필터:** 돌파 강도 ≥ ATR(14) × 0.15 · SECONDARY 공통 거래량 1.5×
+**Squeeze 조건:** 신호봉 직전 10봉 중 8봉 이상이 `BB Width ≤ ATR(14) × 1.5`  
+**추가 필터:** 돌파 강도 ≥ ATR(14) × 0.15
 
 ---
 
 ## 실행 흐름
 
-한 번의 실행(`python main.py`)은 아래 순서로 **258건**을 처리합니다.
+한 번의 실행(`python main.py`)은 코인마다 아래 순서로 검사해 총 **258건**을 처리합니다.
 
 ```
-RSI (27) → RSI Div (27) → Fib (27) → MACD (27) → Stochastic (27)
-  → Engulfing (27) → EMA Cross (27) → VWAP Cross (15)
-  → Supertrend (27) → BB Squeeze (27)
+RSI (27) → RSI 다이버전스 (27) → 피보나치 (27)   ← 같은 RSI 데이터 재사용
+  → MACD (27) → Stochastic (27) → Engulfing (27)
+  → EMA Cross (27) → VWAP Cross (15) → Supertrend (27) → BB Squeeze (27)
 ```
 
-각 검사마다:
+1. OKX에서 최근 OHLCV 100개를 조회하고 지표를 계산합니다. RSI 다이버전스와 피보나치는 RSI 데이터를 재사용하므로 추가 API 호출이 없습니다.
+2. 완성 캔들로 신호를 판정하고, 1회 발화 규칙과 그룹별 필터를 적용합니다.
+3. 통과한 신호는 대기열에 담습니다. 검사 사이에는 `0.5초` 지연이 있습니다.
+4. 모든 검사가 끝나면 대기열을 **요약 메시지 1개**로 Telegram에 보냅니다. 실행 중 오류로 중단되어도 그때까지 찾은 신호는 `finally`에서 전송됩니다.
 
-1. OKX에서 OHLCV 100개를 조회하고 지표를 계산합니다.
-2. 완성 캔들 2개로 신호를 판정합니다.
-3. 중복 방지 · 거래량 필터를 통과한 신호는 대기열에 담습니다.
-4. 검사 사이 `0.5초` 지연으로 API 부하를 줄입니다.
+개별 코인·타임프레임·신호에서 오류가 나도 **나머지 검사는 계속** 진행됩니다.
 
-모든 검사가 끝나면 대기열의 신호를 **요약 메시지 1개**로 Telegram에 전송합니다. 실행 도중 오류로 중단되더라도, 그 시점까지 찾은 신호는 `finally`에서 함께 전송됩니다.
+### Telegram 알림 예시
 
-개별 코인/타임프레임에서 오류가 나도 **나머지 검사는 계속** 진행됩니다.
+```
+🚨 신호 요약 (UTC 04:00)
+📈 BTC LONG
+ 🔥 4h: RSI 일반 Div
+ ⚡️ 1h: Fib 0.5-0.618, EMA Cross
+📉 SOL SHORT
+ ⚡️ 1h: RSI 히든 Div
+```
 
-GitHub Actions Summary에는 총 검사·발생·오류 건수와 **10개 신호별 breakdown**, BTC 최근 확정 캔들 RSI/MACD/Stochastic 값이 기록됩니다.
+### GitHub Actions Summary
+
+- 총 검사 · 발생 · 오류 건수
+- 10개 신호별 검사/발생 건수
+- BTC 최근 확정 캔들의 RSI · MACD · Stochastic 값
 
 ---
 
 ## Fork 후 설치·활용 가이드
 
-처음 사용하는 경우에도 아래 순서대로 설정하면 자신의 Telegram으로 알림을 받을 수 있습니다. 이 봇은 주문 권한이나 OKX API Key를 요구하지 않습니다.
+이 봇은 주문 권한이나 OKX API Key를 요구하지 않습니다.
 
 ### 1. 저장소 Fork 및 Actions 활성화
 
 1. 이 페이지 오른쪽 위의 **Fork**를 눌러 자신의 GitHub 계정으로 복사합니다.
-2. Fork된 저장소의 **Actions** 탭에서 안내가 표시되면 **I understand my workflows, go ahead and enable them**을 선택합니다.
-3. 필요하면 [main.py](main.py)의 `WATCHLIST`와 각 코인 제한 목록을 자신의 전략에 맞게 수정하고 커밋합니다.
+2. Fork된 저장소의 **Actions** 탭에서 **I understand my workflows, go ahead and enable them**을 선택합니다.
+3. 필요하면 [main.py](main.py)의 `WATCHLIST`, `VWAP_COINS`를 수정하고 커밋합니다.
 
 ### 2. Telegram Bot과 Chat ID 준비
 
 1. Telegram에서 `@BotFather`를 열고 `/newbot`으로 봇을 생성합니다.
 2. 발급받은 토큰을 복사합니다. 이것이 `TELEGRAM_BOT_TOKEN`입니다.
-3. 생성한 봇에게 Telegram에서 먼저 메시지(예: `/start`)를 보냅니다.
-4. 브라우저에서 `https://api.telegram.org/bot<토큰>/getUpdates`를 열고 응답의 `message.chat.id` 값을 확인합니다. 이것이 개인 채팅용 `TELEGRAM_CHAT_ID`입니다.
+3. 생성한 봇에게 먼저 메시지(예: `/start`)를 보냅니다.
+4. 브라우저에서 `https://api.telegram.org/bot<토큰>/getUpdates`를 열고 응답의 `message.chat.id` 값을 확인합니다. 이것이 `TELEGRAM_CHAT_ID`입니다.
 
 그룹 알림은 봇을 그룹에 초대하고 메시지를 보낸 뒤 같은 방식으로 `chat.id`를 확인합니다. 그룹 ID는 보통 음수입니다.
 
 ### 3. GitHub Secrets 등록
 
-Fork한 저장소에서 **Settings → Secrets and variables → Actions → New repository secret**으로 다음 값을 각각 등록합니다.
+Fork한 저장소 → **Settings → Secrets and variables → Actions → New repository secret**
 
 | Secret | 값 |
 | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | BotFather가 발급한 토큰 |
 | `TELEGRAM_CHAT_ID` | 알림을 받을 개인/그룹 Chat ID |
 
-Secrets는 워크플로우 로그에 표시되지 않습니다. 토큰을 README, 코드, 커밋 메시지에 직접 넣지 마세요.
+Secrets는 워크플로우 로그에 `***`로 가려집니다. 토큰을 README, 코드, 커밋 메시지에 직접 넣지 마세요.
 
-### 4. 15분 정각 스케줄 등록
+### 4. 15분 정각 스케줄 등록 (외부 크론)
 
-이 저장소는 `repository_dispatch`로 실행됩니다. [console.cron-job.org](https://console.cron-job.org/) 등 외부 스케줄러에 아래 요청을 등록합니다.
-
-| 항목 | 값 |
-| --- | --- |
-| Cron | `0,15,30,45 * * * *` |
-| Timezone | `Asia/Seoul` |
-| URL | `https://api.github.com/repos/<GITHUB_ID>/<FORK_REPOSITORY>/dispatches` |
-
-`<GITHUB_ID>`와 `<FORK_REPOSITORY>`는 반드시 본인의 GitHub 사용자명과 Fork한 저장소 이름으로 바꿉니다. 자세한 헤더·본문과 PAT 생성 방법은 아래 “외부 크론 트리거”를 그대로 사용하면 됩니다.
-
-### 5. 첫 실행 확인
-
-1. Fork 저장소의 **Actions** → `RSI Telegram Signal Bot`을 엽니다.
-2. **Run workflow**로 한 번 수동 실행합니다.
-3. 실행의 **Summary**에서 258건 검사와 오류 유무를 확인합니다.
-4. 다음 정각 스케줄 실행 후 Telegram 알림을 확인합니다. 조건에 맞는 신호가 없으면 알림이 없는 것이 정상입니다.
-
----
-
-## 세부 설정 참고
-
-### 1. Telegram Secrets
-
-GitHub 저장소 → **Settings → Secrets and variables → Actions**
-
-| Secret | 설명 |
-| --- | --- |
-| `TELEGRAM_BOT_TOKEN` | BotFather가 발급한 Bot Token |
-| `TELEGRAM_CHAT_ID` | 알림을 받을 채팅 ID |
-
-OKX API Key는 **필요 없습니다** (공개 데이터만 사용).
-
-### 2. 외부 크론 트리거
-
-워크플로우는 `repository_dispatch` 이벤트로 실행됩니다.  
-[console.cron-job.org](https://console.cron-job.org/)에서 매 15분 정각에 POST 요청을 보냅니다.
+워크플로우는 `repository_dispatch` 이벤트로 실행됩니다. [console.cron-job.org](https://console.cron-job.org/) 등 외부 스케줄러에 아래 요청을 등록합니다.
 
 | 항목 | 값 |
 | --- | --- |
+| Method | `POST` |
 | Cron | `0,15,30,45 * * * *` |
 | Timezone | `Asia/Seoul` |
 | URL | `https://api.github.com/repos/<GITHUB_ID>/<FORK_REPOSITORY>/dispatches` |
@@ -360,23 +365,26 @@ Content-Type: application/json
 }
 ```
 
-Fine-grained PAT는 **Fork한 본인 저장소만** 선택하고, `Contents: Read and write` 권한을 부여합니다. URL의 두 자리표시자는 본인의 GitHub 사용자명과 저장소 이름으로 교체해야 합니다.
+Fine-grained PAT는 **Fork한 본인 저장소만** 선택하고 `Contents: Read and write` 권한을 부여합니다. 만료일을 설정하고, `main` 브랜치에 직접 push를 막는 보호 규칙을 함께 두는 것을 권장합니다. 토큰이 유출되어도 봇 코드를 바꿀 수 없게 하기 위해서입니다.
 
-### 3. 동작 확인
+### 5. 첫 실행 확인
 
-1. GitHub **Actions** → `RSI Telegram Signal Bot` 선택
-2. **Run workflow**로 수동 실행
-3. **Summary** 탭에서 258건 검사 결과 확인
+1. **Actions** → `RSI Telegram Signal Bot` → **Run workflow**로 수동 실행합니다.
+2. 실행 **Summary**에서 258건 검사와 오류 유무를 확인합니다.
+3. 다음 정각 실행 후 Telegram 알림을 확인합니다. 조건에 맞는 신호가 없으면 알림이 없는 것이 정상입니다.
 
 ---
 
-## 로컬 실행
+## 로컬 실행 · 테스트
 
 ```bash
 pip install -r requirements.txt
 export TELEGRAM_BOT_TOKEN="your-token"
 export TELEGRAM_CHAT_ID="your-chat-id"
 python main.py
+
+# 단위 테스트 (네트워크 불필요)
+python -m unittest test_signal_policy -v
 ```
 
 Windows PowerShell:
@@ -387,10 +395,13 @@ $env:TELEGRAM_CHAT_ID = "your-chat-id"
 python main.py
 ```
 
+RSI 다이버전스 · 피보나치의 상세 설계는 [docs/plan_rsi_divergence_fib.md](docs/plan_rsi_divergence_fib.md)에 있습니다.
+
 ---
 
 ## 주의사항
 
 - 이 프로젝트는 **정보성 알림 도구**이며, 투자 조언이나 자동 매매 시스템이 아닙니다.
-- GitHub Actions 러너 시작이 지연되어도, 완성 캔들만 사용하므로 미완성 데이터가 포함되지 않습니다.
-- 거래량 필터 미통과 시 신호는 차단되며, 로그에 `Skipped ... volume below ...`로 기록됩니다.
+- 신호 임계값은 백테스트로 검증된 값이 아닙니다.
+- RSI는 최근 100봉으로 계산하므로 TradingView(전체 이력) 값과 소수점이 조금 다를 수 있고, 드물게 피벗 판정이 달라질 수 있습니다.
+- 저장소가 public이면 Actions 로그와 Summary(발생 신호 포함)를 누구나 볼 수 있습니다. 비밀값은 Secrets로만 관리하세요.
