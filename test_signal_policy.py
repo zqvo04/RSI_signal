@@ -168,6 +168,56 @@ class SignalPolicyTests(unittest.TestCase):
         assert self._divs(self._div_frame(9, {})) == []
         assert self._divs(self._div_frame(0, {})) == []
 
+    @staticmethod
+    def _fib_frame(n, bars, base=(100.0, 100.1, 99.9, 100.0)):
+        """Flat (o,h,l,c) frame with overrides {position: (o,h,l,c)}."""
+        rows = [bars.get(i, base) for i in range(n)]
+        return pd.DataFrame({
+            "timestamp": [1_000_000_000_000 + i * 3_600_000 for i in range(n)],
+            "open": [r[0] for r in rows], "high": [r[1] for r in rows],
+            "low": [r[2] for r in rows], "close": [r[3] for r in rows], "volume": 1.0,
+        })
+
+    def _fib(self, frame):
+        with patch("main.is_freshly_closed", return_value=True):
+            return main.find_fib_signal(frame, "1h")
+
+    def _long_bars(self, **extra):
+        # PL=8 low 90, PH=15 high 110 (R=20, zone 100..97.64); bullish bounce on last bar c=20
+        bars = {8: (100, 100.1, 90, 100), 15: (100, 110, 99.9, 100), 20: (99, 99.6, 98.9, 99.5)}
+        bars.update(extra)
+        return bars
+
+    def _short_bars(self):
+        # PH=8 high 110, PL=15 low 90 (zone 100..102.36); bearish rejection on last bar
+        return {8: (100, 110, 99.9, 100), 15: (100, 100.1, 90, 100), 20: (101, 101.1, 100.4, 100.5)}
+
+    def test_f1_long_fires(self):
+        assert self._fib(self._fib_frame(21, self._long_bars())) == ("LONG", "Fib 0.5-0.618")
+
+    def test_f2_short_fires(self):
+        assert self._fib(self._fib_frame(21, self._short_bars())) == ("SHORT", "Fib 0.5-0.618")
+
+    def test_f3_close_below_0786_invalidates(self):
+        frame = self._fib_frame(21, self._long_bars() | {18: (100, 100.1, 93.9, 94.0)})
+        assert self._fib(frame) is None
+
+    def test_f4_new_high_after_pivot_invalidates(self):
+        frame = self._fib_frame(21, self._long_bars() | {19: (100, 111, 99.9, 100)})
+        assert self._fib(frame) is None
+
+    def test_f5_second_qualifying_bar_does_not_fire(self):
+        frame = self._fib_frame(21, self._long_bars() | {18: (99, 99.6, 98.9, 99.5)})
+        assert self._fib(frame) is None
+
+    def test_f6_small_range_vs_atr(self):
+        wide = (100, 101, 99, 100)  # ATR ~2 -> R=6 < 3*ATR
+        bars = {8: (100, 101, 97, 100), 15: (100, 103, 99, 100), 20: (99, 99.6, 98.5, 99.5)}
+        assert self._fib(self._fib_frame(21, bars, base=wide)) is None
+        bars.update({15: (100, 106, 99, 100), 20: (100.4, 101.2, 100.2, 101.0)})  # control: R=9 > 3*ATR fires
+        assert self._fib(self._fib_frame(21, bars, base=wide)) == ("LONG", "Fib 0.5-0.618")
+        assert self._fib(self._fib_frame(21, {})) is None  # no pivots, no exception
+
 
 if __name__ == "__main__":
     unittest.main()

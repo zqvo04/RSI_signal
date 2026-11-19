@@ -273,6 +273,52 @@ def find_rsi_divergences(frame: pd.DataFrame, timeframe: str) -> list[tuple[str,
     return found
 
 
+def find_fib_signal(frame: pd.DataFrame, timeframe: str) -> Optional[tuple[str, str]]:
+    """Return (side, label) when the latest closed candle first bounces inside the 0.5-0.618 Fib zone."""
+    completed = completed_candles(frame, timeframe).reset_index(drop=True)
+    n = len(completed)
+    if n < PIVOT_LEFT + PIVOT_RIGHT + 2 or not is_freshly_closed(completed.iloc[-1], timeframe):
+        return None
+    atr = ta.atr(completed["high"], completed["low"], completed["close"], length=14)
+    atr_value = None if atr is None or atr.empty else atr.iloc[-1]
+    if atr_value is None or pd.isna(atr_value) or atr_value <= 0:
+        return None
+    high, low, close, open_ = completed["high"], completed["low"], completed["close"], completed["open"]
+    lo_idx = find_pivots(low, PIVOT_LEFT, PIVOT_RIGHT)[0]
+    hi_idx = find_pivots(high, PIVOT_LEFT, PIVOT_RIGHT)[1]
+    if not lo_idx or not hi_idx or lo_idx[-1] == hi_idx[-1]:
+        return None
+    c = n - 1
+    if hi_idx[-1] > lo_idx[-1]:
+        side, ph = "LONG", hi_idx[-1]
+        pl = max((i for i in lo_idx if i < ph), default=None)
+    else:
+        side, pl = "SHORT", lo_idx[-1]
+        ph = max((i for i in hi_idx if i < pl), default=None)
+    if ph is None or pl is None:
+        return None
+    top_price, bottom_price = high[ph], low[pl]
+    rng = top_price - bottom_price
+    if rng < atr_value * FIB_MIN_RANGE_ATR or ph - pl > DIV_RANGE_MAX or pl - ph > DIV_RANGE_MAX:
+        return None
+    if side == "LONG":
+        # empty close slice -> NaN comparison is False -> passes
+        if high[ph + 1:c + 1].max() > top_price or close[ph + 1:c].min() < top_price - FIB_INVALID * rng:
+            return None
+        zone_top, zone_bottom = top_price - FIB_ZONE_TOP * rng, top_price - FIB_ZONE_BOTTOM * rng
+        cond = lambda k: low[k] <= zone_top and close[k] > zone_bottom and close[k] > open_[k]
+        start = ph
+    else:
+        if low[pl + 1:c + 1].min() < bottom_price or close[pl + 1:c].max() > bottom_price + FIB_INVALID * rng:
+            return None
+        zone_bottom, zone_top = bottom_price + FIB_ZONE_TOP * rng, bottom_price + FIB_ZONE_BOTTOM * rng
+        cond = lambda k: high[k] >= zone_bottom and close[k] < zone_top and close[k] < open_[k]
+        start = pl
+    if cond(c) and not any(cond(k) for k in range(start + PIVOT_RIGHT, c)):
+        return side, "Fib 0.5-0.618"
+    return None
+
+
 def passes_volume_filter(
     frame: pd.DataFrame,
     timeframe: str,
