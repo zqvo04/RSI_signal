@@ -88,6 +88,13 @@ FIB_ZONE_TOP = 0.5
 FIB_ZONE_BOTTOM = 0.618
 FIB_INVALID = 0.786
 FIB_MIN_RANGE_ATR = 3.0
+DERIV_COINS = VWAP_COINS  # funding/OI info alerts: major coins only
+FUNDING_HISTORY_LIMIT = 90   # 8h settlements (~30 days)
+FUNDING_MIN_ABS = 0.0003     # ignore |rate| < 0.03% per 8h even if it is a percentile extreme
+OI_HISTORY_LIMIT = 100       # hourly bars; shortcut: only ~3 days of 24h-change baseline, upgrade if OKX allows deeper history
+OI_CHANGE_HOURS = 24
+EXTREME_TAIL = 0.05          # top/bottom 5% of own history
+EXTREME_MIN_SAMPLES = 30
 FIB_LABELS = {"LONG": "피보나치 되돌림 지지 반등(0.5~0.618)", "SHORT": "피보나치 되돌림 저항 반락(0.5~0.618)"}
 
 
@@ -318,6 +325,79 @@ def find_fib_signal(frame: pd.DataFrame, timeframe: str) -> Optional[tuple[str, 
     if cond(c) and not any(cond(k) for k in range(start + PIVOT_RIGHT, c)):
         return side, FIB_LABELS[side]
     return None
+
+
+def find_extreme(values: list[float], min_abs: float = 0.0) -> Optional[tuple[str, float]]:
+    """Return ("HIGH"|"LOW", tail share) when the last value has just entered the tail of its own history."""
+    values = [v for v in values if v is not None and not pd.isna(v)]
+    if len(values) < EXTREME_MIN_SAMPLES:
+        return None
+    base = values[:-1]
+
+    def tail(x: float) -> Optional[tuple[str, float]]:
+        if abs(x) < min_abs:
+            return None
+        top = sum(v >= x for v in base) / len(base)
+        bottom = sum(v <= x for v in base) / len(base)
+        if top <= EXTREME_TAIL:
+            return "HIGH", top
+        if bottom <= EXTREME_TAIL:
+            return "LOW", bottom
+        return None
+
+    current, previous = tail(values[-1]), tail(values[-2])
+    return current if current and (previous is None or previous[0] != current[0]) else None
+
+
+def find_funding_info(exchange: ccxt.okx, symbol: str) -> Optional[str]:
+    """Info line when the latest settled funding rate just entered an extreme of its recent history."""
+    rows = exchange.fetch_funding_rate_history(symbol, limit=FUNDING_HISTORY_LIMIT)
+    rows = sorted((r for r in rows if r.get("fundingRate") is not None and r.get("timestamp")), key=lambda r: r["timestamp"])
+    if not rows or int(time.time() * 1000) - rows[-1]["timestamp"] >= SCAN_INTERVAL_SECONDS * 1000:
+        return None  # same one-shot rule as is_freshly_closed: only the first scan after settlement
+    rates = [r["fundingRate"] for r in rows]
+    hit = find_extreme(rates, FUNDING_MIN_ABS)
+    if hit is None or (hit[0] == "HIGH") != (rates[-1] > 0):
+        return None
+    side, share = hit
+    return (
+        f"펀딩비 {rates[-1] * 100:+.3f}% (직전 {len(rates) - 1}회 중 {'상위' if side == 'HIGH' else '하위'} {share:.0%})"
+        f" — {'롱' if rates[-1] > 0 else '숏'} 쏠림"
+    )
+
+
+def find_oi_info(exchange: ccxt.okx, symbol: str, price_change: Optional[float]) -> Optional[str]:
+    """Info line when the 24h open-interest change just entered an extreme of its recent history."""
+    hour_ms = TIMEFRAME_MILLISECONDS["1h"]
+    now_ms = int(time.time() * 1000)
+    rows = exchange.fetch_open_interest_history(symbol, "1h", limit=OI_HISTORY_LIMIT)
+    # assumes row timestamp = bucket start (unverified on OKX); drop the still-forming hour
+    rows = sorted(
+        (r for r in rows if r.get("timestamp") and (r.get("openInterestValue") or r.get("openInterestAmount"))
+         and r["timestamp"] + hour_ms <= now_ms),
+        key=lambda r: r["timestamp"],
+    )
+    if len(rows) <= OI_CHANGE_HOURS or now_ms - (rows[-1]["timestamp"] + hour_ms) >= SCAN_INTERVAL_SECONDS * 1000:
+        return None
+    oi = [r.get("openInterestValue") or r.get("openInterestAmount") for r in rows]
+    changes = [oi[i] / oi[i - OI_CHANGE_HOURS] - 1 for i in range(OI_CHANGE_HOURS, len(oi))]
+    hit = find_extreme(changes)
+    if hit is None:
+        return None
+    side, share = hit
+    line = (
+        f"OI 24h {changes[-1]:+.1%} (직전 {len(changes) - 1}시간 중 {'상위' if side == 'HIGH' else '하위'} {share:.0%})"
+        f" — {'급증' if side == 'HIGH' else '급감'}"
+    )
+    return line + (f" | 가격 24h {price_change:+.1%}" if price_change is not None else "")
+
+
+def price_change_24h(frame: Optional[pd.DataFrame]) -> Optional[float]:
+    """24h close-to-close change from completed 1h candles, None when unavailable."""
+    if frame is None:
+        return None
+    close = completed_candles(frame, "1h")["close"]
+    return close.iloc[-1] / close.iloc[-25] - 1 if len(close) >= 25 else None
 
 
 def passes_volume_filter(
@@ -891,11 +971,25 @@ def format_signal_digest(signals: list[tuple[str, str, str, str]]) -> str:
     return "\n".join(lines)
 
 
+_pending_info: list[tuple[str, list[str]]] = []  # (coin, info lines); informational, no side
+
+
+def format_info_digest(info: list[tuple[str, list[str]]]) -> str:
+    lines = [f"📊 파생 지표 극단 (UTC {pd.Timestamp.now(tz='UTC'):%H:%M})"]
+    for coin, items in info:
+        lines.append(coin)
+        lines.extend(f" · {item}" for item in items)
+    return "\n".join(lines)
+
+
 def flush_signals() -> None:
-    """Send all signals queued during the scan as a single Telegram message."""
+    """Send queued signals and, separately, queued funding/OI info as Telegram messages."""
     if _pending_signals:
         send_telegram_message(format_signal_digest(_pending_signals))
         _pending_signals.clear()
+    if _pending_info:
+        send_telegram_message(format_info_digest(_pending_info))
+        _pending_info.clear()
 
 
 def write_workflow_summary(
@@ -1066,6 +1160,8 @@ def main() -> None:
         "Engulfing": {"checked": 0, "signals": 0},
         "EMA Cross": {"checked": 0, "signals": 0},
         "VWAP Cross": {"checked": 0, "signals": 0},
+        "Funding": {"checked": 0, "signals": 0},
+        "OI": {"checked": 0, "signals": 0},
         "Supertrend": {"checked": 0, "signals": 0},
         "BB Squeeze": {"checked": 0, "signals": 0},
     }
@@ -1079,11 +1175,14 @@ def main() -> None:
             logging.warning("OKX market not found: %s", symbol)
             continue
 
+        frame_1h = None
         for timeframe in TIMEFRAMES:
             checked_count += 1
             signal_breakdown["RSI"]["checked"] += 1
             try:
                 frame = fetch_rsi_frame(exchange, symbol, timeframe)
+                if timeframe == "1h":
+                    frame_1h = frame
                 completed_candle_pair = latest_completed_candles(frame, timeframe)
                 if coin == "BTC" and completed_candle_pair:
                     previous, current = completed_candle_pair
@@ -1305,6 +1404,30 @@ def main() -> None:
                 logging.exception("Failed to check BB Squeeze %s (%s): %s", symbol, timeframe, error)
             finally:
                 time.sleep(REQUEST_DELAY_SECONDS)
+
+        if coin in DERIV_COINS:
+            change = price_change_24h(frame_1h)
+            info_lines = []
+            for name, finder in (
+                ("Funding", lambda: find_funding_info(exchange, symbol)),
+                ("OI", lambda: find_oi_info(exchange, symbol, change)),
+            ):
+                checked_count += 1
+                signal_breakdown[name]["checked"] += 1
+                try:
+                    line = finder()
+                    if line:
+                        info_lines.append(line)
+                        signal_breakdown[name]["signals"] += 1
+                except (ccxt.BaseError, requests.RequestException, ValueError, KeyError, IndexError, TypeError) as error:
+                    error_count += 1
+                    logging.exception("Failed to check %s %s: %s", name, symbol, error)
+                finally:
+                    time.sleep(REQUEST_DELAY_SECONDS)
+            if info_lines:
+                _pending_info.append((coin, info_lines))
+                signal_count += 1
+                logging.info("Queued funding/OI info for %s: %s", symbol, info_lines)
 
     logging.info(
         "Signal scan finished: %d checks, %d alerts sent, %d errors",

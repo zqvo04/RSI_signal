@@ -230,5 +230,81 @@ class SignalPolicyTests(unittest.TestCase):
         assert self._fib(self._fib_frame(21, {})) is None  # no pivots, no exception
 
 
+class DerivativesInfoTests(unittest.TestCase):
+    HOUR = 3_600_000
+    NOW = 10 * 3600 + 300  # 10:05 UTC, seconds
+
+    def _funding_rows(self, rates, last_age_ms=60_000):
+        end = self.NOW * 1000 - last_age_ms
+        return [{"timestamp": end - (len(rates) - 1 - i) * 8 * self.HOUR, "fundingRate": r} for i, r in enumerate(rates)]
+
+    def _funding(self, rates, **kw):
+        ex = Mock()
+        ex.fetch_funding_rate_history.return_value = self._funding_rows(rates, **kw)
+        with patch("main.time.time", return_value=self.NOW):
+            return main.find_funding_info(ex, "BTC/USDT:USDT")
+
+    @staticmethod
+    def _base(n=60):
+        return [0.0001 + 0.00002 * (i % 3) for i in range(n)]
+
+    def test_extreme_entry_only(self):
+        assert main.find_extreme(self._base() + [0.01]) == ("HIGH", 0.0)
+        assert main.find_extreme(self._base() + [-0.01]) == ("LOW", 0.0)
+        assert main.find_extreme(self._base() + [0.01, 0.011]) is None  # already extreme
+        assert main.find_extreme(self._base()[:10] + [0.01]) is None  # too little history
+        assert main.find_extreme(self._base() + [0.0001]) is None
+
+    def test_funding_long_crowded(self):
+        line = self._funding(self._base() + [0.0008])
+        assert "펀딩비 +0.080%" in line and "상위 0%" in line and "롱 쏠림" in line
+
+    def test_funding_short_crowded(self):
+        assert "숏 쏠림" in self._funding(self._base() + [-0.0008])
+
+    def test_funding_filters(self):
+        assert self._funding(self._base() + [0.0002]) is None  # below 0.03% floor
+        assert self._funding(self._base() + [0.0008, 0.0009]) is None  # not a fresh entry
+        assert self._funding(self._base() + [0.0008], last_age_ms=16 * 60_000) is None  # stale settlement
+        assert self._funding([]) is None
+
+    def _oi(self, last_jump, price_change=0.041):
+        hour = self.NOW // 3600 * 3600 * 1000  # start of the still-forming 10:00 bucket
+        vals = [100 + (i % 3) for i in range(76)]
+        vals[-1] = vals[-2] * last_jump
+        rows = [{"timestamp": hour - (len(vals) - i) * self.HOUR, "openInterestValue": v} for i, v in enumerate(vals)]
+        rows.append({"timestamp": hour, "openInterestValue": 1.0})  # forming hour must be ignored
+        ex = Mock()
+        ex.fetch_open_interest_history.return_value = rows
+        with patch("main.time.time", return_value=self.NOW):
+            return main.find_oi_info(ex, "BTC/USDT:USDT", price_change)
+
+    def test_oi_surge_and_drop(self):
+        line = self._oi(1.2)
+        assert "급증" in line and "가격 24h +4.1%" in line
+        assert "급감" in self._oi(0.8)
+        assert "가격" not in self._oi(1.2, price_change=None)
+        assert self._oi(1.0) is None
+
+    def test_info_digest_and_separate_message(self):
+        info = [("BTC", ["펀딩비 +0.080%", "OI 24h +12.3%"]), ("SOL", ["펀딩비 -0.064%"])]
+        text = main.format_info_digest(info)
+        assert text.splitlines()[1:] == ["BTC", " · 펀딩비 +0.080%", " · OI 24h +12.3%", "SOL", " · 펀딩비 -0.064%"]
+        main._pending_signals[:] = [("BTC", "LONG", "1h", "RSI")]
+        main._pending_info[:] = info
+        with patch("main.send_telegram_message") as send:
+            main.flush_signals()
+        assert send.call_count == 2
+        assert send.call_args_list[0].args[0].startswith("🚨") and send.call_args_list[1].args[0].startswith("📊")
+        assert not main._pending_signals and not main._pending_info
+
+    def test_price_change_24h(self):
+        assert main.price_change_24h(None) is None
+        with patch("main.time.time", return_value=self.NOW):
+            ts = [(self.NOW // 3600 - 40 + i) * self.HOUR for i in range(40)]
+            frame = pd.DataFrame({"timestamp": ts, "close": [100.0] * 16 + [110.0] * 24})
+            assert main.price_change_24h(frame) == 110.0 / 100.0 - 1
+
+
 if __name__ == "__main__":
     unittest.main()

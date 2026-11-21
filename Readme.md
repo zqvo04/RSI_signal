@@ -12,7 +12,7 @@ OKX USDT 무기한 선물의 기술적 신호를 감지해 Telegram으로 알려
 | 감시 코인 | BTC, ETH, SOL, HYPE, DOGE, XRP, LIT, SUI, BNB (9개) |
 | 신호 종류 | RSI · **RSI 다이버전스** · **피보나치 되돌림** · MACD · Stochastic · Engulfing · EMA Cross · VWAP Cross · Supertrend · BB Squeeze (10종) |
 | 타임프레임 | 1h · 4h · 1d (모든 신호 공통) |
-| 1회 검사 | **258건** (코인 × 타임프레임 × 신호) |
+| 1회 검사 | **268건** (코인 × 타임프레임 × 신호 + 펀딩/OI 10건) |
 | 실행 주기 | 매 15분 정각 (`00`, `15`, `30`, `45`분, 외부 크론 → GitHub Actions) |
 | 거래소 | OKX USDT 무기한 선물 (`COIN/USDT:USDT`) |
 
@@ -30,8 +30,10 @@ OKX USDT 무기한 선물의 기술적 신호를 감지해 Telegram으로 알려
 | VWAP Cross | CORE | BTC, ETH, SOL, BNB, XRP | 15 |
 | Supertrend (ATR 10, 3.0) | SECONDARY | 9코인 | 27 |
 | BB Squeeze Breakout | SECONDARY | 9코인 | 27 |
+| 펀딩비 극단 (정보성) | 정보 | BTC, ETH, SOL, BNB, XRP | 5 |
+| OI 극단 (정보성) | 정보 | BTC, ETH, SOL, BNB, XRP | 5 |
 
-감시 대상은 [main.py](main.py) 상단의 `WATCHLIST`, `VWAP_COINS`에서 수정할 수 있습니다.
+감시 대상은 [main.py](main.py) 상단의 `WATCHLIST`, `VWAP_COINS`(펀딩/OI 대상 `DERIV_COINS`도 동일)에서 수정할 수 있습니다.
 
 ---
 
@@ -270,7 +272,7 @@ DIF = MACD선, DEA = Signal선
 
 ## 실행 흐름
 
-한 번의 실행(`python main.py`)은 코인마다 아래 순서로 검사해 총 **258건**을 처리합니다.
+한 번의 실행(`python main.py`)은 코인마다 아래 순서로 검사해 총 **268건**을 처리합니다.
 
 ```
 RSI (27) → RSI 다이버전스 (27) → 피보나치 (27)   ← 같은 RSI 데이터 재사용
@@ -284,6 +286,22 @@ RSI (27) → RSI 다이버전스 (27) → 피보나치 (27)   ← 같은 RSI 데
 4. 모든 검사가 끝나면 대기열을 **요약 메시지 1개**로 Telegram에 보냅니다. 실행 중 오류로 중단되어도 그때까지 찾은 신호는 `finally`에서 전송됩니다.
 
 개별 코인·타임프레임·신호에서 오류가 나도 **나머지 검사는 계속** 진행됩니다.
+
+### 펀딩비 · OI 극단 (정보성, BTC · ETH · SOL · BNB · XRP)
+
+매매 신호가 **아니며** LONG/SHORT 방향이 없습니다. 별도 Telegram 메시지(`📊 파생 지표 극단`)로 전송됩니다.
+
+- **펀딩비**: 정산(00/08/16 UTC) 직후 첫 스캔에서, 직전 90회 정산 대비 상위/하위 5%에 **진입**하고 `|rate| ≥ 0.03%`일 때 (부호에 따라 롱/숏 쏠림 표기)
+- **OI**: 확정된 1h 기준 24h 변화율이 직전 최대 100시간 대비 상위(급증)/하위(급감) 5%에 **진입**할 때. 24h 가격 변동률을 함께 표시
+- 이미 극단이던 값은 재알림하지 않습니다. 상태 저장 없이 매 실행 조회한 이력만 사용합니다.
+- 주의: OKX OI 이력 타임스탬프 기준(구간 시작 가정)과 이력 깊이는 실환경 확인 전입니다.
+
+```
+📊 파생 지표 극단 (UTC 08:00)
+BTC
+ · 펀딩비 +0.081% (직전 89회 중 상위 2%) — 롱 쏠림
+ · OI 24h +12.3% (직전 75시간 중 상위 3%) — 급증 | 가격 24h +4.1%
+```
 
 ### Telegram 알림 예시
 
