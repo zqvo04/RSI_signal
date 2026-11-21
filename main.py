@@ -90,9 +90,12 @@ FIB_INVALID = 0.786
 FIB_MIN_RANGE_ATR = 3.0
 DERIV_COINS = VWAP_COINS  # funding/OI info alerts: major coins only
 FUNDING_HISTORY_LIMIT = 90   # 8h settlements (~30 days)
-FUNDING_MIN_ABS = 0.0003     # ignore |rate| < 0.03% per 8h even if it is a percentile extreme
-OI_HISTORY_LIMIT = 100       # hourly bars; shortcut: only ~3 days of 24h-change baseline, upgrade if OKX allows deeper history
+FUNDING_MIN_ABS = 0.0002     # ignore |rate| < 0.02% per 8h even if it is a percentile extreme
+OI_HISTORY_LIMIT = 768       # hourly bars = 744 24h-changes (~31 days); OKX serves 100 per call, ~60 days deep
+OI_PAGE_LIMIT = 100
 OI_CHANGE_HOURS = 24
+OI_EXTREME_TAIL = 0.02       # OI changes are autocorrelated, so a tighter tail than funding
+OI_QUIET_HOURS = 6           # no alert if the last 6 hourly values were already extreme (stops re-firing)
 EXTREME_TAIL = 0.05          # top/bottom 5% of own history
 EXTREME_MIN_SAMPLES = 30
 FIB_LABELS = {"LONG": "피보나치 되돌림 지지 반등(0.5~0.618)", "SHORT": "피보나치 되돌림 저항 반락(0.5~0.618)"}
@@ -327,26 +330,35 @@ def find_fib_signal(frame: pd.DataFrame, timeframe: str) -> Optional[tuple[str, 
     return None
 
 
-def find_extreme(values: list[float], min_abs: float = 0.0) -> Optional[tuple[str, float]]:
-    """Return ("HIGH"|"LOW", tail share) when the last value has just entered the tail of its own history."""
+def find_extreme(
+    values: list[float], min_abs: float = 0.0, tail: float = EXTREME_TAIL, quiet: int = 1
+) -> Optional[tuple[str, float]]:
+    """Return ("HIGH"|"LOW", tail share) when the last value has just entered the tail of its own history.
+
+    Suppressed if any of the previous ``quiet`` values was already extreme on the same side.
+    """
     values = [v for v in values if v is not None and not pd.isna(v)]
     if len(values) < EXTREME_MIN_SAMPLES:
         return None
     base = values[:-1]
 
-    def tail(x: float) -> Optional[tuple[str, float]]:
+    def side_of(x: float) -> Optional[tuple[str, float]]:
         if abs(x) < min_abs:
             return None
         top = sum(v >= x for v in base) / len(base)
         bottom = sum(v <= x for v in base) / len(base)
-        if top <= EXTREME_TAIL:
+        if top <= tail:
             return "HIGH", top
-        if bottom <= EXTREME_TAIL:
+        if bottom <= tail:
             return "LOW", bottom
         return None
 
-    current, previous = tail(values[-1]), tail(values[-2])
-    return current if current and (previous is None or previous[0] != current[0]) else None
+    current = side_of(values[-1])
+    if current is None or any(
+        (earlier := side_of(v)) is not None and earlier[0] == current[0] for v in values[-1 - quiet:-1]
+    ):
+        return None
+    return current
 
 
 def find_funding_info(exchange: ccxt.okx, symbol: str) -> Optional[str]:
@@ -370,18 +382,33 @@ def find_oi_info(exchange: ccxt.okx, symbol: str, price_change: Optional[float])
     """Info line when the 24h open-interest change just entered an extreme of its recent history."""
     hour_ms = TIMEFRAME_MILLISECONDS["1h"]
     now_ms = int(time.time() * 1000)
-    rows = exchange.fetch_open_interest_history(symbol, "1h", limit=OI_HISTORY_LIMIT)
-    # assumes row timestamp = bucket start (unverified on OKX); drop the still-forming hour
+    rows_by_ts: dict[int, dict] = {}
+    until = None
+    while len(rows_by_ts) < OI_HISTORY_LIMIT:  # OKX returns at most 100 rows per call, newest first
+        page = exchange.fetch_open_interest_history(
+            symbol, "1h", limit=OI_PAGE_LIMIT, params={"until": until} if until else {}
+        )
+        stamps = [r["timestamp"] for r in page if r.get("timestamp")]
+        if until is None:  # same one-shot rule as funding: skip the extra pages unless an hour just closed
+            closed = [t for t in stamps if t + hour_ms <= now_ms]
+            if not closed or now_ms - (max(closed) + hour_ms) >= SCAN_INTERVAL_SECONDS * 1000:
+                return None
+        rows_by_ts.update({r["timestamp"]: r for r in page if r.get("timestamp")})
+        if not stamps or min(stamps) == until:
+            break
+        until = min(stamps)
+    rows = list(rows_by_ts.values())
+    # row timestamp = bucket start (confirmed on OKX); drop the still-forming hour
     rows = sorted(
-        (r for r in rows if r.get("timestamp") and (r.get("openInterestValue") or r.get("openInterestAmount"))
+        (r for r in rows if (r.get("openInterestValue") or r.get("openInterestAmount"))
          and r["timestamp"] + hour_ms <= now_ms),
         key=lambda r: r["timestamp"],
     )
-    if len(rows) <= OI_CHANGE_HOURS or now_ms - (rows[-1]["timestamp"] + hour_ms) >= SCAN_INTERVAL_SECONDS * 1000:
+    if len(rows) <= OI_CHANGE_HOURS:
         return None
     oi = [r.get("openInterestValue") or r.get("openInterestAmount") for r in rows]
     changes = [oi[i] / oi[i - OI_CHANGE_HOURS] - 1 for i in range(OI_CHANGE_HOURS, len(oi))]
-    hit = find_extreme(changes)
+    hit = find_extreme(changes, tail=OI_EXTREME_TAIL, quiet=OI_QUIET_HOURS)
     if hit is None:
         return None
     side, share = hit

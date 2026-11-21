@@ -263,7 +263,8 @@ class DerivativesInfoTests(unittest.TestCase):
         assert "숏 쏠림" in self._funding(self._base() + [-0.0008])
 
     def test_funding_filters(self):
-        assert self._funding(self._base() + [0.0002]) is None  # below 0.03% floor
+        assert self._funding(self._base() + [0.00015]) is None  # extreme rank but below the 0.02% floor
+        assert self._funding(self._base() + [0.0002]) is not None  # at the floor
         assert self._funding(self._base() + [0.0008, 0.0009]) is None  # not a fresh entry
         assert self._funding(self._base() + [0.0008], last_age_ms=16 * 60_000) is None  # stale settlement
         assert self._funding([]) is None
@@ -285,6 +286,31 @@ class DerivativesInfoTests(unittest.TestCase):
         assert "급감" in self._oi(0.8)
         assert "가격" not in self._oi(1.2, price_change=None)
         assert self._oi(1.0) is None
+
+    def test_oi_quiet_period_blocks_refire(self):
+        vals = [100 + (i % 3) for i in range(80)]
+        assert main.find_extreme([v / 100 - 1 for v in vals[:60]] + [0.2], tail=0.02, quiet=6) == ("HIGH", 0.0)
+        series = [v / 1000 for v in vals[:60]] + [0.2, 0.19, 0.21]  # already extreme 1-2 hours ago
+        assert main.find_extreme(series, tail=0.02, quiet=6) is None
+        calm = [v / 1000 for v in vals[:60]] + [0.2] + [0.001] * 8 + [0.25]
+        assert main.find_extreme(calm, tail=0.02, quiet=6) is not None  # quiet gap >= 6h re-arms
+
+    def test_oi_pages_and_skips_when_stale(self):
+        now = 1_700_000_000 // 3600 * 3600 + 300  # real-looking epoch: ts 0 is falsy
+        hour = now // 3600 * 3600 * 1000
+        vals = [100 + (i % 3) for i in range(230)]
+        vals[-1] = vals[-2] * 1.2
+        rows = [{"timestamp": hour - (len(vals) - i) * self.HOUR, "openInterestValue": v} for i, v in enumerate(vals)]
+        pages = {None: rows[-100:], rows[-100]["timestamp"]: rows[-200:-99], rows[-200]["timestamp"]: rows[:-199]}
+        ex = Mock()
+        ex.fetch_open_interest_history.side_effect = lambda sym, tf, limit, params: pages.get(params.get("until"), [])
+        with patch("main.time.time", return_value=now):
+            line = main.find_oi_info(ex, "BTC/USDT:USDT", None)
+        assert "급증" in line and "직전 205시간" in line and ex.fetch_open_interest_history.call_count == 4  # last call hits the end of history
+        ex.reset_mock()
+        with patch("main.time.time", return_value=now + 1200):  # 25 min after the hour: stale
+            assert main.find_oi_info(ex, "BTC/USDT:USDT", None) is None
+        assert ex.fetch_open_interest_history.call_count == 1
 
     def test_info_digest_and_separate_message(self):
         info = [("BTC", ["펀딩비 +0.080%", "OI 24h +12.3%"]), ("SOL", ["펀딩비 -0.064%"])]
