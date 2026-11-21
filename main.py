@@ -94,8 +94,8 @@ FUNDING_MIN_ABS = 0.0002     # ignore |rate| < 0.02% per 8h even if it is a perc
 OI_HISTORY_LIMIT = 768       # hourly bars = 744 24h-changes (~31 days); OKX serves 100 per call, ~60 days deep
 OI_PAGE_LIMIT = 100
 OI_CHANGE_HOURS = 24
-OI_EXTREME_TAIL = 0.02       # OI changes are autocorrelated, so a tighter tail than funding
-OI_QUIET_HOURS = 6           # no alert if the last 6 hourly values were already extreme (stops re-firing)
+OI_EXTREME_TAIL = 0.01       # OI changes are autocorrelated, so a tighter tail than funding
+OI_QUIET_HOURS = 24          # no alert if any of the last 24 hourly values was already extreme (stops re-firing)
 EXTREME_TAIL = 0.05          # top/bottom 5% of own history
 EXTREME_MIN_SAMPLES = 30
 FIB_LABELS = {"LONG": "피보나치 되돌림 지지 반등(0.5~0.618)", "SHORT": "피보나치 되돌림 저항 반락(0.5~0.618)"}
