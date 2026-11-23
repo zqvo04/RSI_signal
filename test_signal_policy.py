@@ -340,6 +340,15 @@ class DerivativesInfoTests(unittest.TestCase):
                 completed = main.completed_candles(frame, tf)
                 assert main.passes_volume_filter(frame, tf, completed.iloc[-1], min_ratio=0.9) is (tf == "1d")
 
+    def test_volume_filter_4h_relaxed(self):
+        with patch("main.time.time", return_value=self.NOW):
+            for tf, expected in (("1h", False), ("4h", True)):
+                ms = main.TIMEFRAME_MILLISECONDS[tf]
+                ts = [(self.NOW * 1000 // ms - 22 + i) * ms for i in range(22)]
+                frame = pd.DataFrame({"timestamp": ts, "volume": [100.0] * 21 + [80.0]})
+                completed = main.completed_candles(frame, tf)
+                assert main.passes_volume_filter(frame, tf, completed.iloc[-1], min_ratio=0.9) is expected
+
 
 if __name__ == "__main__":
     unittest.main()

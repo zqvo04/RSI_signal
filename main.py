@@ -55,6 +55,7 @@ ATR_LENGTH = 14
 SECONDARY_N = 20
 MULT = 1.5
 VOLUME_AVG_LENGTH = SECONDARY_N
+VOLUME_4H_RELAX = 0.8  # 4h min volume ratio = signal ratio * 0.8
 HIGHER_TF_MAP = {"1h": "4h"}
 CORE_VOLUME_RATIOS = {
     "RSI": 0.9,
@@ -436,6 +437,8 @@ def passes_volume_filter(
     """Return True when the signal candle volume is >= recent average * min_ratio."""
     if timeframe == "1d":
         return True  # 1d reversals follow high-volume selloffs, so the 20-day average blocks them
+    if timeframe == "4h":
+        min_ratio *= VOLUME_4H_RELAX
     completed = completed_candles(frame, timeframe)
     if len(completed) < VOLUME_AVG_LENGTH + 1:
         return False
