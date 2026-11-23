@@ -331,6 +331,15 @@ class DerivativesInfoTests(unittest.TestCase):
             frame = pd.DataFrame({"timestamp": ts, "close": [100.0] * 16 + [110.0] * 24})
             assert main.price_change_24h(frame) == 110.0 / 100.0 - 1
 
+    def test_volume_filter_skipped_on_1d_only(self):
+        with patch("main.time.time", return_value=self.NOW):
+            for tf in ("1h", "1d"):
+                ms = main.TIMEFRAME_MILLISECONDS[tf]
+                ts = [(self.NOW * 1000 // ms - 22 + i) * ms for i in range(22)]
+                frame = pd.DataFrame({"timestamp": ts, "volume": [100.0] * 21 + [10.0]})
+                completed = main.completed_candles(frame, tf)
+                assert main.passes_volume_filter(frame, tf, completed.iloc[-1], min_ratio=0.9) is (tf == "1d")
+
 
 if __name__ == "__main__":
     unittest.main()

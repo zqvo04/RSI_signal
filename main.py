@@ -434,6 +434,8 @@ def passes_volume_filter(
     min_ratio: float = 1.0,
 ) -> bool:
     """Return True when the signal candle volume is >= recent average * min_ratio."""
+    if timeframe == "1d":
+        return True  # 1d reversals follow high-volume selloffs, so the 20-day average blocks them
     completed = completed_candles(frame, timeframe)
     if len(completed) < VOLUME_AVG_LENGTH + 1:
         return False
